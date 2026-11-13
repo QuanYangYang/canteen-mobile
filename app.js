@@ -430,7 +430,7 @@
     const itemHtml = (i) => {
       const photos = i.photoCount || 0;
       return `
-        <article class="item ${itemDone(i) ? 'done' : ''} ${i.short ? 'short' : ''}" data-action="open-photos" data-id="${i.id}">
+        <article class="item ${itemDone(i) ? 'done' : ''} ${i.short ? 'short' : ''}" data-id="${i.id}">
           <div class="item-head">
             <div class="line-no">${esc(i.lineNo)}</div>
             <div class="item-title">
@@ -440,13 +440,15 @@
             ${i.short ? '<span class="badge amber">缺送</span>' : (itemDone(i) ? '<span class="badge">已完成</span>' : `<span class="badge gray">${photos ? photos + ' 张' : '待拍照'}</span>`)}
           </div>
           <div class="item-grid">
-            <div class="mini-field"><label>实送</label><input inputmode="decimal" data-field="qty" data-id="${i.id}" value="${fmtNum(i.qtyReceived)}" ${i.short ? 'disabled' : ''}></div>
-            <div class="mini-field"><label>金额</label><div class="readonly-value">¥${fmtNum(i.amount)}</div></div>
+            <label class="mini-field qty-field"><span>实送数</span><input inputmode="decimal" data-field="qty" data-id="${i.id}" value="${fmtNum(i.qtyReceived)}" ${i.short ? 'disabled' : ''}></label>
+            <button class="photo-trigger ${photos ? 'has-photo' : ''}" data-action="open-photos" data-id="${i.id}" data-camera="1" ${i.short ? 'disabled' : ''}>
+              <span class="photo-trigger-main">${i.short ? '缺送免拍' : (photos ? '继续拍照' : '拍照')}</span>
+              <span class="photo-trigger-sub">${i.short ? '—' : photos + ' / 5'}</span>
+            </button>
           </div>
           ${i.receiveRemark ? `<div class="remark-preview ${i.short ? 'amber' : ''}">${esc(i.receiveRemark)}</div>` : ''}
           <div class="item-actions">
             <button class="btn small secondary" data-action="remark" data-id="${i.id}">备注${i.receiveRemark ? ' ✓' : ''}</button>
-            <button class="btn small ghost" data-action="open-photos" data-id="${i.id}" data-camera="1">${photos ? '照片 ' + photos + '/5' : '拍照'}</button>
           </div>
         </article>`;
     };
@@ -456,11 +458,9 @@
           <span class="badge ${t.status === 'submitted' ? 'amber' : ''}">${t.status === 'submitted' ? '已提交' : '收货中'}</span>
           <span class="muted small mono">${esc(t.noteNo)}</span>
         </div>
-        <h2 style="margin-top:8px">${esc(t.company)}</h2>
-        <p class="muted">${esc(t.date || '')} · ${esc(t.customer || '')}</p>
+        <p class="muted" style="margin:7px 0 0">${esc(t.date || '')} · ${esc(t.customer || '')}</p>
         <div class="progress-label"><span>已完成 ${p.done} / ${p.total}</span><span>${p.pct}%</span></div>
         <div class="progress"><i style="width:${p.pct}%"></i></div>
-        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'} style="margin-top:12px">${allDone() ? '完成收货' : `还差 ${state.items.length - doneCount()} 项`}</button>
       </div>
       <div class="toolbar">
         <div class="search"><span>⌕</span><input id="search" type="search" placeholder="搜索品名 / 编号" value="${esc(state.search)}"></div>
@@ -469,7 +469,7 @@
       ${done.length ? `<div class="group-title">已完成 ${done.length}</div><div class="list">${done.map(itemHtml).join('')}</div>` : ''}
       ${!visible.length ? '<div class="empty"><div class="big">⌕</div>没有匹配的货品</div>' : ''}
       <div class="bottom-bar"><div class="bottom-inner">
-        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'}>${allDone() ? '完成收货' : `还差 ${state.items.length - doneCount()} 项`}</button>
+        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'}>完成收货${allDone() ? '' : `（还差 ${state.items.length - doneCount()} 项）`}</button>
       </div></div>`;
   }
 
@@ -497,7 +497,8 @@
           ${cards}
           ${canAdd ? `<button class="add-photo" data-action="add-photo" type="button"><span>＋<br>拍照<br><span class="small">${photos.length}/5</span></span></button>` : ''}
         </div>
-        ${canAdd ? `<button class="btn secondary block" data-action="album-photo" type="button" style="margin-top:10px">从相册选择（可多选，最多 5 张）</button>` : ''}
+        ${canAdd ? `<button class="btn secondary block" data-action="album-photo" type="button" style="margin-top:10px">从相册选择（可多选，最多 5 张）</button>
+        <p class="small muted" style="margin-top:6px">如果系统相册只允许选 1 张，可以重复添加，最多 5 张。</p>` : ''}
         ${item.short ? '<div class="notice" style="margin-top:12px">该货品已标记缺送，无需拍照。</div>' : ''}
         ${!item.short && photos.length >= MAX_PHOTOS ? '<p class="small muted" style="margin-top:10px">已达到 5 张上限。</p>' : ''}
         ${!item.short && !photos.length ? '<p class="small muted" style="margin-top:10px">至少拍 1 张；可拍 1–5 张。</p>' : ''}
@@ -870,14 +871,15 @@
     }
     showModal(`
       <h2>拍照</h2>
-      <p class="muted">首次使用会请求相机权限；也可以改从相册选择。</p>
+      <p class="muted">相机保持开启，可连续拍 1–5 张；离开时自动关闭。</p>
       <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
+      <div id="camera-count" class="camera-count">已拍 0 / 5</div>
       <div id="camera-error" class="notice red" hidden></div>
       <div class="modal-actions">
         <button class="btn secondary" data-action="camera-album" type="button">从相册选择</button>
         <button class="btn primary" data-action="capture-camera" id="capture-camera" type="button" disabled>拍照</button>
       </div>
-      <button class="btn ghost block" data-action="close-modal" type="button" style="margin-top:8px">关闭</button>`);
+      <button class="btn ghost block" data-action="camera-done" type="button" style="margin-top:8px">完成拍照</button>`);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
@@ -893,6 +895,10 @@
       await video.play().catch(() => {});
       const btn = $('#capture-camera');
       if (btn) btn.disabled = false;
+      const item = getItem(state.selectedId);
+      const count = item ? photosFor(item.id).length : 0;
+      const counter = $('#camera-count');
+      if (counter) counter.textContent = `已拍 ${count} / 5`;
     } catch (err) {
       const box = $('#camera-error');
       if (box) {
@@ -902,6 +908,27 @@
           : '无法打开相机。请检查设备相机，或点“从相册选择”。';
       }
     }
+  }
+
+  async function pickAlbum() {
+    if (window.showOpenFilePicker) {
+      try {
+        const handles = await window.showOpenFilePicker({
+          multiple: true,
+          types: [{
+            description: '图片',
+            accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.bmp'] },
+          }],
+        });
+        const files = await Promise.all(handles.map((h) => h.getFile()));
+        await addPhotos(files);
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        /* 浏览器不支持这种选择器时，回退到 input[type=file] */
+      }
+    }
+    $('#file-photo').click();
   }
 
   async function captureCamera() {
@@ -914,8 +941,17 @@
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
     if (!blob) { toast('拍照失败，请重试'); return; }
     const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    closeModal();
     await addPhotos([file]);
+    const item = getItem(state.selectedId);
+    const count = item ? photosFor(item.id).length : 0;
+    if (count >= MAX_PHOTOS) {
+      closeModal();
+      toast('已拍满 5 张');
+      return;
+    }
+    const counter = $('#camera-count');
+    if (counter) counter.textContent = `已拍 ${count} / 5`;
+    toast(`已添加，当前 ${count} / 5`);
   }
 
   async function deletePhoto(photoId) {
@@ -1018,8 +1054,9 @@
       return;
     }
     if (action === 'add-photo') { await openCamera(); return; }
-    if (action === 'album-photo') { $('#file-photo').click(); return; }
-    if (action === 'camera-album') { closeModal(); $('#file-photo').click(); return; }
+    if (action === 'album-photo') { await pickAlbum(); return; }
+    if (action === 'camera-album') { closeModal(); await pickAlbum(); return; }
+    if (action === 'camera-done') { closeModal(); render(); return; }
     if (action === 'capture-camera') { await captureCamera(); return; }
     if (action === 'delete-photo') { await deletePhoto(id); return; }
     if (action === 'finish-photos') {
@@ -1109,9 +1146,13 @@
   $('#file-zip').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; restoreZip(f); });
   $('#file-photo').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
   $('#file-camera').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
-  window.addEventListener('pagehide', () => { persist().catch(() => {}); });
+  window.addEventListener('pagehide', () => { persist().catch(() => {}); stopCameraStream(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') persist().catch(() => {});
+    if (document.visibilityState === 'hidden') {
+      persist().catch(() => {});
+      stopCameraStream();
+      if ($('#camera-video')) closeModal();
+    }
   });
 
   /* ---------------- Init ---------------- */
