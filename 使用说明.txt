@@ -11,20 +11,15 @@
 本端已取消“电脑开局域网服务、手机连同一 Wi-Fi”的方式；请使用 HTTPS。
 PWA 的离线缓存和“添加到主屏幕”都要求 HTTPS，这是浏览器限制。
 
-推荐：Cloudflare Pages（免费、HTTPS、无需备案）
-1. 解压“手机拍照端.zip”，得到 index.html、app.js、照片等文件。
-2. 打开 https://dash.cloudflare.com/ → Workers & Pages → Create →
-   Pages → Upload assets。
-3. 项目名填 canteen-mobile，点 Create project。
-4. 把解压后的“文件内容”（不要只拖外层文件夹）拖入上传框；也可直接
-   拖入 zip，但请确认解压后 index.html 在站点根目录。
-5. 点 Deploy site，得到 https://项目名.pages.dev。
-6. 手机用 Safari/Chrome 打开该地址；iPhone 分享→“添加到主屏幕”，
-   Android 菜单→“安装应用/添加到主屏幕”。
+当前已部署：GitHub Pages（免费、HTTPS、public 仓库）
+- 地址：https://quanyangyang.github.io/canteen-mobile/
+- 更新：把解压后的文件内容提交到仓库 main 分支根目录，等待 Pages 重新发布。
+- 手机用 Safari/Chrome 打开该地址；iPhone 分享→“添加到主屏幕”，
+  Android 菜单→“安装应用/添加到主屏幕”。
 
 备选（免费，但国内访问可能不稳定）
-- GitHub Pages：需 public 仓库；把文件放到仓库根目录，Settings→Pages→
-  从 main 分支根目录发布；地址 https://用户名.github.io/仓库名/。
+- Cloudflare Pages：免费、HTTPS、无需备案，但国内可能被 DNS 污染/阻断；
+  不要把 workers.dev/pages.dev 直接当正式入口。
 - Netlify Drop：https://app.netlify.com/drop 拖入文件夹；免费额度有限。
 - Vercel Hobby：适合个人试用；商用/学校长期使用请先确认条款。
 
