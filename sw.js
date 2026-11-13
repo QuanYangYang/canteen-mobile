@@ -1,5 +1,5 @@
 /* 离线缓存：应用壳 + 本地 vendor；不缓存任何业务数据。 */
-const CACHE = 'canteen-mobile-v2';
+const CACHE = 'canteen-mobile-v3';
 const ASSETS = [
   './',
   './index.html',
