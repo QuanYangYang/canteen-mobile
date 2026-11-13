@@ -11,7 +11,7 @@
     task: null,
     items: [],
     photos: [],
-    settings: { locationCode: '01', operator: '' },
+    settings: { locationCode: '', operator: '' },
     view: 'home',
     selectedId: null,
     search: '',
@@ -19,6 +19,7 @@
     zipName: '',
     urls: [],
     db: null,
+    cameraStream: null,
   };
   const mem = { kv: {}, photos: [] };
 
@@ -155,6 +156,31 @@
     item.done = itemDone(item);
     return item;
   }
+  function normalizeLocation(value) {
+    const raw = String(value || '').trim().replace(/\s+/g, '');
+    if (!raw) return '';
+    return /^\d+$/.test(raw) ? (raw.length < 2 ? raw.padStart(2, '0') : raw) : raw.slice(0, 20);
+  }
+  function settingsReady() {
+    return !!(normalizeLocation(state.settings.locationCode) && String(state.settings.operator || '').trim());
+  }
+  function recalcAmount(item) {
+    if (item.short) { item.amount = 0; return; }
+    const importedQty = item.importedQty;
+    const unchanged = importedQty !== undefined && Math.abs(Number(item.qtyReceived || 0) - Number(importedQty || 0)) < 1e-9;
+    item.amount = unchanged
+      ? Number(item.importedAmount || 0)
+      : round2(Number(item.qtyReceived || 0) * Number(item.price || 0));
+  }
+  function refreshItemAmounts() {
+    for (const item of state.items) {
+      if (item.importedQty === undefined) {
+        item.importedQty = Number(item.qtyReceived || 0);
+        item.importedAmount = Number(item.amount || 0);
+      }
+      recalcAmount(item);
+    }
+  }
   function photosFor(itemId) {
     return state.photos.filter((p) => p.itemId === itemId).sort((a, b) => a.order - b.order);
   }
@@ -213,7 +239,8 @@
       qtyReceived: Number(x.qtyReceived || 0),
       price: x.price === '' ? 0 : Number(x.price),
       amount: Number(x.amount || 0),
-      amountManual: false,
+      importedQty: Number(x.qtyReceived || 0),
+      importedAmount: Number(x.amount || 0),
       remark: x.remark || '',
       receiveRemark: '',
       short: false,
@@ -300,12 +327,33 @@
   function render() {
     revokeUrls();
     const view = $('#view');
-    $('#back-btn').hidden = state.view === 'home';
-    if (state.view === 'home') renderHome(view);
+    $('#back-btn').hidden = state.view === 'home' || state.view === 'setup';
+    $('#settings-btn').hidden = state.view === 'setup';
+    if (state.view === 'setup') renderSetup(view);
+    else if (state.view === 'home') renderHome(view);
     else if (state.view === 'list') renderList(view);
     else if (state.view === 'photos') renderPhotos(view);
     else if (state.view === 'export') renderExport(view);
     else { state.view = 'home'; renderHome(view); }
+  }
+
+  function renderSetup(view) {
+    setHeader('开始使用', '先设置收货地点和验收人员');
+    view.innerHTML = `
+      <section class="card">
+        <h2>收货前设置</h2>
+        <p class="muted">地点和验收人员会写入每一条导出的货品记录，也用于照片编号。</p>
+        <div class="field">
+          <label for="setup-location">收货地点 / 地点码</label>
+          <input id="setup-location" maxlength="20" value="${esc(state.settings.locationCode)}" placeholder="如 食堂、065">
+        </div>
+        <div class="field">
+          <label for="setup-operator">验收人员</label>
+          <input id="setup-operator" maxlength="30" value="${esc(state.settings.operator)}" placeholder="姓名或工号">
+        </div>
+        <div class="notice green">两项都必须填写；设置后仍可在右上角修改。</div>
+        <button class="btn primary block" data-action="save-setup" style="margin-top:14px">保存并开始</button>
+      </section>`;
   }
 
   function renderHome(view) {
@@ -359,8 +407,8 @@
       </div>` : ''}
       ${current}
       <div class="card">
-        <div class="settings-row"><span>地点码</span><span class="mono">${esc(state.settings.locationCode || '未设置')}</span></div>
-        <div class="settings-row"><span>操作员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
+        <div class="settings-row"><span>收货地点</span><span class="mono">${esc(state.settings.locationCode || '未设置')}</span></div>
+        <div class="settings-row"><span>验收人员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
         <button class="btn ghost small" data-action="settings" style="margin-top:8px">修改设置</button>
       </div>
       <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : '建议使用手机浏览器；iPhone 可“添加到主屏幕”。'}</p>`;
@@ -393,13 +441,12 @@
           </div>
           <div class="item-grid">
             <div class="mini-field"><label>实送</label><input inputmode="decimal" data-field="qty" data-id="${i.id}" value="${fmtNum(i.qtyReceived)}" ${i.short ? 'disabled' : ''}></div>
-            <div class="mini-field"><label>金额</label><input inputmode="decimal" data-field="amount" data-id="${i.id}" value="${fmtNum(i.amount)}" ${i.short ? 'disabled' : ''}></div>
+            <div class="mini-field"><label>金额</label><div class="readonly-value">¥${fmtNum(i.amount)}</div></div>
           </div>
           ${i.receiveRemark ? `<div class="remark-preview ${i.short ? 'amber' : ''}">${esc(i.receiveRemark)}</div>` : ''}
           <div class="item-actions">
             <button class="btn small secondary" data-action="remark" data-id="${i.id}">备注${i.receiveRemark ? ' ✓' : ''}</button>
-            <button class="btn small ghost" data-action="open-photos" data-id="${i.id}">${photos ? '照片 ' + photos + '/5' : '拍照'}</button>
-            ${!i.short ? `<button class="btn small ghost" data-action="recalc" data-id="${i.id}">按单价重算</button>` : ''}
+            <button class="btn small ghost" data-action="open-photos" data-id="${i.id}" data-camera="1">${photos ? '照片 ' + photos + '/5' : '拍照'}</button>
           </div>
         </article>`;
     };
@@ -413,6 +460,7 @@
         <p class="muted">${esc(t.date || '')} · ${esc(t.customer || '')}</p>
         <div class="progress-label"><span>已完成 ${p.done} / ${p.total}</span><span>${p.pct}%</span></div>
         <div class="progress"><i style="width:${p.pct}%"></i></div>
+        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'} style="margin-top:12px">${allDone() ? '完成收货' : `还差 ${state.items.length - doneCount()} 项`}</button>
       </div>
       <div class="toolbar">
         <div class="search"><span>⌕</span><input id="search" type="search" placeholder="搜索品名 / 编号" value="${esc(state.search)}"></div>
@@ -421,7 +469,7 @@
       ${done.length ? `<div class="group-title">已完成 ${done.length}</div><div class="list">${done.map(itemHtml).join('')}</div>` : ''}
       ${!visible.length ? '<div class="empty"><div class="big">⌕</div>没有匹配的货品</div>' : ''}
       <div class="bottom-bar"><div class="bottom-inner">
-        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'}>${allDone() ? '提交收货' : `还差 ${state.items.length - doneCount()} 项`}</button>
+        <button class="btn primary block" data-action="submit" ${allDone() ? '' : 'disabled'}>${allDone() ? '完成收货' : `还差 ${state.items.length - doneCount()} 项`}</button>
       </div></div>`;
   }
 
@@ -447,11 +495,13 @@
         ${item.receiveRemark ? `<div class="remark-preview ${item.short ? 'amber' : ''}">${esc(item.receiveRemark)}</div>` : ''}
         <div class="photo-grid" style="margin-top:12px">
           ${cards}
-          ${canAdd ? `<button class="add-photo" data-action="add-photo" type="button"><span>＋<br>拍照 / 选图<br><span class="small">${photos.length}/5</span></span></button>` : ''}
+          ${canAdd ? `<button class="add-photo" data-action="add-photo" type="button"><span>＋<br>拍照<br><span class="small">${photos.length}/5</span></span></button>` : ''}
         </div>
+        ${canAdd ? `<button class="btn secondary block" data-action="album-photo" type="button" style="margin-top:10px">从相册选择（可多选，最多 5 张）</button>` : ''}
         ${item.short ? '<div class="notice" style="margin-top:12px">该货品已标记缺送，无需拍照。</div>' : ''}
         ${!item.short && photos.length >= MAX_PHOTOS ? '<p class="small muted" style="margin-top:10px">已达到 5 张上限。</p>' : ''}
         ${!item.short && !photos.length ? '<p class="small muted" style="margin-top:10px">至少拍 1 张；可拍 1–5 张。</p>' : ''}
+        <button class="btn primary block" data-action="finish-photos" data-id="${item.id}" ${item.short || photos.length ? '' : 'disabled'} style="margin-top:14px">完成本项</button>
       </div>
       <div class="bottom-bar"><div class="bottom-inner">
         <button class="btn secondary" data-action="back-list">返回列表</button>
@@ -485,8 +535,8 @@
       <div class="card">
         <h3>收货信息</h3>
         <div class="meta-list">
-          <div class="meta-row"><span>地点</span><span>${esc(t.locationCode)}</span></div>
-          <div class="meta-row"><span>操作员</span><span>${esc(t.operator || '未设置')}</span></div>
+          <div class="meta-row"><span>收货地点</span><span>${esc(t.locationCode)}</span></div>
+          <div class="meta-row"><span>验收人员</span><span>${esc(t.operator || '未设置')}</span></div>
           <div class="meta-row"><span>开始时间</span><span>${esc(t.startedAt)}</span></div>
           <div class="meta-row"><span>提交时间</span><span>${esc(t.submittedAt || '')}</span></div>
           <div class="meta-row"><span>文件</span><span>${esc(state.zipName || '')}</span></div>
@@ -495,11 +545,21 @@
   }
 
   /* ---------------- Modals ---------------- */
+  function stopCameraStream() {
+    if (state.cameraStream) {
+      try { state.cameraStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* ignore */ }
+      state.cameraStream = null;
+    }
+  }
   function showModal(html) {
+    stopCameraStream();
     $('#modal-root').innerHTML = `<div class="modal-backdrop" data-action="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
     return $('.modal');
   }
-  function closeModal() { $('#modal-root').innerHTML = ''; }
+  function closeModal() {
+    stopCameraStream();
+    $('#modal-root').innerHTML = '';
+  }
   function showError(title, err) {
     const details = err && err.details && err.details.noteIds
       ? `<p class="small">检测到 ${err.details.noteIds.length} 张单：${esc(err.details.noteIds.slice(0, 4).join('、'))}…</p>`
@@ -509,13 +569,23 @@
   function openSettings() {
     showModal(`
       <h2>设置</h2>
-      <p class="muted">地点码用于照片编号，例如 065。</p>
-      <div class="field"><label>地点码</label><input id="set-location" inputmode="numeric" value="${esc(state.settings.locationCode)}" placeholder="如 065"></div>
-      <div class="field"><label>操作员</label><input id="set-operator" value="${esc(state.settings.operator)}" placeholder="姓名或工号"></div>
+      <p class="muted">收货地点用于照片编号；验收人员会写入导出的每一条货品记录。</p>
+      <div class="field"><label>收货地点 / 地点码</label><input id="set-location" maxlength="20" value="${esc(state.settings.locationCode)}" placeholder="如 食堂、065"></div>
+      <div class="field"><label>验收人员</label><input id="set-operator" maxlength="30" value="${esc(state.settings.operator)}" placeholder="姓名或工号"></div>
       <div class="modal-actions">
         <button class="btn secondary" data-action="close-modal">取消</button>
         <button class="btn primary" data-action="save-settings">保存</button>
       </div>`);
+  }
+  function applySettings(codeInput, operatorInput) {
+    const code = normalizeLocation(codeInput);
+    const operator = String(operatorInput || '').trim();
+    if (!code) { toast('请填写收货地点'); return false; }
+    if (!operator) { toast('请填写验收人员'); return false; }
+    state.settings.locationCode = code;
+    state.settings.operator = operator;
+    try { localStorage.setItem('canteen.settings', JSON.stringify(state.settings)); } catch (e) { /* file:// may block */ }
+    return true;
   }
   function openRemark(itemId) {
     const item = getItem(itemId);
@@ -632,7 +702,8 @@
         id: uid(), taskId: task.id,
         lineNo: x.lineNo, lineKey: x.lineKey, code: x.code, name: x.name,
         qtyOrdered: x.qtyOrdered, unit: x.unit, qtyReceived: x.qtyReceived,
-        price: x.price, amount: x.amount, amountManual: !!x.amountManual,
+        price: x.price, amount: x.amount,
+        importedQty: Number(x.qtyReceived || 0), importedAmount: Number(x.amount || 0),
         remark: x.remark || '', receiveRemark: x.receiveRemark || '',
         short: !!x.short, preShortQty: null, preShortAmount: null,
         photoCount: 0, done: !!x.short,
@@ -692,6 +763,7 @@
   async function buildZip() {
     if (!state.task) throw new Error('没有任务');
     if (!allDone()) throw new Error('还有货品未完成');
+    refreshItemAmounts();
     const items = state.items.slice().sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
     const totalPhotos = allPhotosCount();
     const xlsx = CanteenWorkbook.buildWorkbook(state.task, items, totalPhotos);
@@ -761,8 +833,10 @@
     const item = getItem(state.selectedId);
     if (!item || item.short) return;
     const remaining = MAX_PHOTOS - photosFor(item.id).length;
-    const list = Array.from(files || []).slice(0, Math.max(0, remaining));
+    const picked = Array.from(files || []);
+    const list = picked.slice(0, Math.max(0, remaining));
     if (!list.length) { toast('已达到 5 张上限'); return; }
+    if (picked.length > list.length) toast(`最多 5 张，只保留前 ${list.length} 张`);
     busy(`正在处理照片 1/${list.length}…`);
     let added = 0;
     for (let idx = 0; idx < list.length; idx++) {
@@ -787,6 +861,61 @@
     unbusy();
     render();
     if (added) toast(`已添加 ${added} 张照片`);
+  }
+
+  async function openCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      $('#file-camera').click();
+      return;
+    }
+    showModal(`
+      <h2>拍照</h2>
+      <p class="muted">首次使用会请求相机权限；也可以改从相册选择。</p>
+      <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
+      <div id="camera-error" class="notice red" hidden></div>
+      <div class="modal-actions">
+        <button class="btn secondary" data-action="camera-album" type="button">从相册选择</button>
+        <button class="btn primary" data-action="capture-camera" id="capture-camera" type="button" disabled>拍照</button>
+      </div>
+      <button class="btn ghost block" data-action="close-modal" type="button" style="margin-top:8px">关闭</button>`);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      const video = $('#camera-video');
+      if (!video || !document.body.contains(video)) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      state.cameraStream = stream;
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      const btn = $('#capture-camera');
+      if (btn) btn.disabled = false;
+    } catch (err) {
+      const box = $('#camera-error');
+      if (box) {
+        box.hidden = false;
+        box.textContent = err && err.name === 'NotAllowedError'
+          ? '相机权限被拒绝。请在浏览器设置中允许相机，或点“从相册选择”。'
+          : '无法打开相机。请检查设备相机，或点“从相册选择”。';
+      }
+    }
+  }
+
+  async function captureCamera() {
+    const video = $('#camera-video');
+    if (!video || !video.videoWidth || !video.videoHeight) { toast('相机还没有准备好'); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!blob) { toast('拍照失败，请重试'); return; }
+    const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    closeModal();
+    await addPhotos([file]);
   }
 
   async function deletePhoto(photoId) {
@@ -819,14 +948,12 @@
       item.short = true;
       item.qtyReceived = 0;
       item.amount = 0;
-      item.amountManual = true;
       refreshItem(item);
     } else {
       if (!window.confirm('取消缺送？')) return false;
       item.short = false;
       item.qtyReceived = item.preShortQty === null ? Number(item.qtyOrdered || 0) : item.preShortQty;
-      item.amount = item.preShortAmount === null ? round2(item.qtyReceived * (item.price || 0)) : item.preShortAmount;
-      item.amountManual = Math.abs(item.amount - round2(item.qtyReceived * (item.price || 0))) > 0.005;
+      recalcAmount(item);
       item.preShortQty = null;
       item.preShortAmount = null;
       refreshItem(item);
@@ -841,12 +968,15 @@
     if (action === 'import-note') { closeModal(); $('#file-note').click(); return; }
     if (action === 'import-zip') { closeModal(); $('#file-zip').click(); return; }
     if (action === 'settings') { openSettings(); return; }
+    if (action === 'save-setup') {
+      if (!applySettings($('#setup-location').value, $('#setup-operator').value)) return;
+      state.view = 'home';
+      render();
+      toast('设置已保存，可以开始收货');
+      return;
+    }
     if (action === 'save-settings') {
-      const code = ($('#set-location').value || '').trim().replace(/\D/g, '');
-      if (!code) { toast('请填写地点码'); return; }
-      state.settings.locationCode = code.length < 2 ? code.padStart(2, '0') : code;
-      state.settings.operator = ($('#set-operator').value || '').trim();
-      try { localStorage.setItem('canteen.settings', JSON.stringify(state.settings)); } catch (e) { /* file:// may block */ }
+      if (!applySettings($('#set-location').value, $('#set-operator').value)) return;
       closeModal();
       render();
       toast('设置已保存');
@@ -856,10 +986,12 @@
     if (action === 'resume' || action === 'open-export') { state.view = action === 'open-export' ? 'export' : 'list'; render(); return; }
     if (action === 'back-list') { state.view = 'list'; render(); return; }
     if (action === 'open-photos') {
+      const startCamera = el.dataset.camera === '1';
       state.selectedId = id || el.dataset.id;
       if (!getItem(state.selectedId)) return;
       state.view = 'photos';
       render();
+      if (startCamera) openCamera();
       return;
     }
     if (action === 'remark') {
@@ -885,17 +1017,10 @@
       if (changed) { closeModal(); render(); toast(item.short ? '已标记缺送' : '已取消缺送'); }
       return;
     }
-    if (action === 'recalc') {
-      const item = getItem(id);
-      if (!item) return;
-      item.amount = round2(Number(item.qtyReceived || 0) * Number(item.price || 0));
-      item.amountManual = false;
-      await persist();
-      render();
-      toast('已按单价重算');
-      return;
-    }
-    if (action === 'add-photo') { $('#file-photo').click(); return; }
+    if (action === 'add-photo') { await openCamera(); return; }
+    if (action === 'album-photo') { $('#file-photo').click(); return; }
+    if (action === 'camera-album') { closeModal(); $('#file-photo').click(); return; }
+    if (action === 'capture-camera') { await captureCamera(); return; }
     if (action === 'delete-photo') { await deletePhoto(id); return; }
     if (action === 'finish-photos') {
       const item = getItem(id);
@@ -956,13 +1081,7 @@
       const n = Number(input.value);
       if (!Number.isFinite(n) || n < 0 || n > 99999) { toast('实送数必须是 0–99999 的数字'); input.value = fmtNum(item.qtyReceived); return; }
       item.qtyReceived = round3(n);
-      if (!item.amountManual) item.amount = round2(item.qtyReceived * (item.price || 0));
-    }
-    if (field === 'amount') {
-      const n = Number(input.value);
-      if (!Number.isFinite(n) || n < 0) { toast('金额必须是非负数字'); input.value = fmtNum(item.amount); return; }
-      item.amount = round2(n);
-      item.amountManual = Math.abs(item.amount - round2(item.qtyReceived * (item.price || 0))) > 0.005;
+      recalcAmount(item);
     }
     refreshItem(item);
     persist().catch((err) => console.error(err));
@@ -989,6 +1108,11 @@
   $('#file-note').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; importNoteFile(f); });
   $('#file-zip').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; restoreZip(f); });
   $('#file-photo').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
+  $('#file-camera').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
+  window.addEventListener('pagehide', () => { persist().catch(() => {}); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persist().catch(() => {});
+  });
 
   /* ---------------- Init ---------------- */
   async function init() {
@@ -1014,8 +1138,9 @@
       state.items = items.map((i) => ({ ...i, done: itemDone(i) }));
       state.photos = (await allPhotos()).filter((p) => p.taskId === task.id);
       for (const item of state.items) item.photoCount = photosFor(item.id).length;
+      refreshItemAmounts();
     }
-    state.view = 'home';
+    state.view = settingsReady() ? 'home' : 'setup';
     render();
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
       navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW', err));

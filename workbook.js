@@ -8,7 +8,7 @@
 })(typeof self !== 'undefined' ? self : this, function (XLSX) {
   'use strict';
 
-  const HEADERS = ['序号', '编号', '品名及规格', '订购数', '单位', '实送数', '单价', '金额（元）', '备注', '收货备注', '缺送'];
+  const HEADERS = ['序号', '编号', '品名及规格', '订购数', '单位', '实送数', '单价', '金额（元）', '备注', '收货备注', '缺送', '收货地点', '验收人员'];
   const META_SHEET = '收货信息';
   const NOTE_SHEET = '送货单';
 
@@ -59,6 +59,8 @@
         text(item.remark),
         text(item.receiveRemark),
         item.short ? '是' : '否',
+        text(task.locationName || task.locationCode),
+        text(task.operator),
       ]);
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -66,6 +68,7 @@
     ws['!cols'] = [
       { wch: 6 }, { wch: 10 }, { wch: 28 }, { wch: 8 }, { wch: 6 },
       { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 14 }, { wch: 20 }, { wch: 6 },
+      { wch: 12 }, { wch: 12 },
     ];
     ws['!rows'] = [{ hpt: 26 }, { hpt: 30 }];
     for (let r = 0; r < aoa.length; r++) {
@@ -83,12 +86,12 @@
           cell.s = style({ bold: true, fill: 'FFE8F0EA' });
           continue;
         }
-        const align = (c === 2 || c === 8 || c === 9) ? 'left' : 'center';
+        const align = (c === 2 || c === 8 || c === 9 || c === 11 || c === 12) ? 'left' : 'center';
         cell.s = style({ align, bold: c === 10 && cell.v === '是' });
       }
     }
     const lastRow = aoa.length;
-    ws['!ref'] = `A1:K${lastRow}`;
+    ws['!ref'] = `A1:M${lastRow}`;
     XLSX.utils.book_append_sheet(wb, ws, NOTE_SHEET);
 
     const meta = [
@@ -97,7 +100,7 @@
       ['任务ID', text(task.id)],
       ['地点码', text(task.locationCode)],
       ['地点名称', text(task.locationName)],
-      ['操作员', text(task.operator)],
+      ['验收人员', text(task.operator)],
       ['单据编号', text(task.noteNo)],
       ['送货日期', text(task.date)],
       ['客户', text(task.customer)],
@@ -223,7 +226,7 @@
       customer: meta['客户'] || '',
       locationCode: meta['地点码'] || '',
       locationName: meta['地点名称'] || '',
-      operator: meta['操作员'] || '',
+      operator: meta['验收人员'] || meta['操作员'] || '',
       startedAt: meta['收货开始时间'] || '',
       submittedAt: meta['提交时间'] || '',
       confirmedAt: meta['验收确认时间'] || '',
