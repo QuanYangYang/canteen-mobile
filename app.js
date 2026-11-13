@@ -310,7 +310,8 @@
 
   function renderHome(view) {
     setHeader('食堂收货', state.settings.locationCode ? `地点 ${state.settings.locationCode}` : '未设置地点');
-    const offline = location.protocol === 'file:' || !state.db;
+    const isFile = location.protocol === 'file:';
+    const storageIssue = !state.db && !isFile;
     const t = state.task;
     const p = taskProgress();
     let current = '';
@@ -349,9 +350,12 @@
         </div>
         <p class="small muted" style="margin-top:14px">只处理一张单，可包含多页；数据保存在本机。</p>
       </section>
-      ${offline ? `<div class="card" style="border-color:#d9a441;background:#fff8e8">
+      ${isFile ? `<div class="card" style="border-color:#d9a441;background:#fff8e8">
         <b>离线单文件模式</b>
         <p class="small" style="margin-top:6px;overflow-wrap:anywhere">部分手机浏览器不允许本地网页长期保存数据。<br>请在同一轮内完成：导入 → 拍照 → 导出；<br>导出后立即保存 ZIP，再关闭页面。</p>
+      </div>` : storageIssue ? `<div class="card" style="border-color:#d9a441;background:#fff8e8">
+        <b>本地存储不可用</b>
+        <p class="small" style="margin-top:6px;overflow-wrap:anywhere">浏览器未允许本地保存。<br>请保持本页面打开，完成导入 → 拍照 → 导出；<br>不要在导出前刷新或关闭。</p>
       </div>` : ''}
       ${current}
       <div class="card">
@@ -359,7 +363,7 @@
         <div class="settings-row"><span>操作员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
         <button class="btn ghost small" data-action="settings" style="margin-top:8px">修改设置</button>
       </div>
-      <p class="small muted" style="text-align:center">${offline ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : '建议使用手机浏览器；iPhone 可“添加到主屏幕”。'}</p>`;
+      <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : '建议使用手机浏览器；iPhone 可“添加到主屏幕”。'}</p>`;
   }
 
   function renderList(view) {
