@@ -2,6 +2,9 @@
 (function () {
   'use strict';
 
+  const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
+  const APP_VERSION = '20261114061420-ded1e122';
+  const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
   const MAX_PHOTOS = 5;
@@ -20,6 +23,13 @@
     urls: [],
     db: null,
     cameraStream: null,
+    swReg: null,
+    swController: false,
+    updateChecking: false,
+    updateLastCheck: 0,
+    updateDismissed: false,
+    updateReloading: false,
+    updateTimer: null,
   };
   const mem = { kv: {}, photos: [] };
 
@@ -335,10 +345,11 @@
     else if (state.view === 'photos') renderPhotos(view);
     else if (state.view === 'export') renderExport(view);
     else { state.view = 'home'; renderHome(view); }
+    if (!$('#update-bar')?.hidden && canAutoReload()) scheduleUpdateReload();
   }
 
   function renderSetup(view) {
-    setHeader('开始使用', '先设置收货地点和验收人员');
+    setHeader(APP_NAME, '先设置收货地点和验收人员');
     view.innerHTML = `
       <section class="card">
         <h2>收货前设置</h2>
@@ -357,7 +368,7 @@
   }
 
   function renderHome(view) {
-    setHeader('食堂收货', state.settings.locationCode ? `地点 ${state.settings.locationCode}` : '未设置地点');
+    setHeader(APP_NAME, state.settings.locationCode ? `地点 ${state.settings.locationCode}` : '未设置地点');
     const isFile = location.protocol === 'file:';
     const storageIssue = !state.db && !isFile;
     const t = state.task;
@@ -389,8 +400,8 @@
     }
     view.innerHTML = `
       <section class="hero card">
-        <div class="logo">✓</div>
-        <h1>食堂收货</h1>
+        <img class="hero-logo" src="icons/logo-192.png" alt="${esc(APP_NAME)}">
+        <h1>${esc(APP_NAME)}</h1>
         <p>导入当天送货单 · 逐项拍照 · 导出收货包</p>
         <div class="stack">
           <button class="btn primary block" data-action="import-note">导入送货单</button>
@@ -411,7 +422,7 @@
         <div class="settings-row"><span>验收人员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
         <button class="btn ghost small" data-action="settings" style="margin-top:8px">修改设置</button>
       </div>
-      <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : '建议使用手机浏览器；iPhone 可“添加到主屏幕”。'}</p>`;
+      <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : 'iPhone 可“添加到主屏幕”。'}</p>`;
   }
 
   function renderList(view) {
@@ -998,9 +1009,120 @@
     return true;
   }
 
+  /* ---------------- Update manager ---------------- */
+  function updateBar(text) {
+    const bar = $('#update-bar');
+    if (!bar) return;
+    const label = $('#update-text');
+    if (label && text) label.textContent = text;
+    bar.hidden = false;
+  }
+
+  function hideUpdateBar() {
+    const bar = $('#update-bar');
+    if (bar) bar.hidden = true;
+  }
+
+  function canAutoReload() {
+    if (state.updateReloading) return false;
+    if (!(state.view === 'home' || state.view === 'list')) return false;
+    if (state.cameraStream || $('#camera-video')) return false;
+    if ($('#modal-root').children.length) return false;
+    const busy = $('#busy');
+    if (busy && !busy.hidden) return false;
+    return true;
+  }
+
+  function scheduleUpdateReload() {
+    if (state.updateTimer || !canAutoReload()) return;
+    state.updateTimer = setTimeout(() => {
+      state.updateTimer = null;
+      if (!canAutoReload()) { scheduleUpdateReload(); return; }
+      state.updateReloading = true;
+      persist().catch(() => {}).finally(() => location.reload());
+    }, 1800);
+  }
+
+  function showUpdateFound(text) {
+    if (state.updateDismissed) return;
+    updateBar(text || '发现新版本，更新后自动刷新');
+    scheduleUpdateReload();
+  }
+
+  function applyUpdate() {
+    if (state.updateReloading) return;
+    const reg = state.swReg;
+    if (reg && reg.waiting) {
+      updateBar('正在更新…');
+      reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      return;
+    }
+    state.updateReloading = true;
+    persist().catch(() => {}).finally(() => location.reload());
+  }
+
+  async function checkForUpdate(force) {
+    if (!state.swReg || state.updateChecking) return;
+    if (!navigator.onLine) return;
+    const now = Date.now();
+    if (!force && now - state.updateLastCheck < 60000) return;
+    state.updateChecking = true;
+    state.updateLastCheck = now;
+    try {
+      const res = await fetch(`version.json?t=${now}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const info = await res.json();
+      if (info && info.version && info.version !== APP_VERSION) {
+        showUpdateFound('发现新版本，正在准备…');
+        try { await state.swReg.update(); } catch (e) { /* ignore */ }
+      }
+      if (state.swReg.waiting) showUpdateFound('新版本已就绪，点“立即更新”');
+    } catch (e) { /* 版本文件不存在/离线，不打扰用户 */ }
+    finally { state.updateChecking = false; }
+  }
+
+  async function setupServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    if (!(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) return;
+    try {
+      state.swController = !!navigator.serviceWorker.controller;
+      const reg = await navigator.serviceWorker.register(`sw.js?v=${encodeURIComponent(APP_VERSION)}`, {
+        scope: './',
+        updateViaCache: 'none',
+      });
+      state.swReg = reg;
+      if (reg.waiting) showUpdateFound('新版本已就绪，点“立即更新”');
+      reg.addEventListener('updatefound', () => {
+        const worker = reg.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateFound('新版本已下载，点“立即更新”');
+          }
+        });
+      });
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (state.updateReloading) return;
+        if (!state.swController) { state.swController = true; return; }
+        state.updateReloading = true;
+        persist().catch(() => {}).finally(() => location.reload());
+      });
+      if (reg.active) setTimeout(() => checkForUpdate(true), 1200);
+    } catch (err) {
+      console.warn('SW', err);
+    }
+  }
+
   async function handleAction(el) {
     const action = el.dataset.action;
     const id = el.dataset.id;
+    if (action === 'apply-update') { applyUpdate(); return; }
+    if (action === 'dismiss-update') {
+      state.updateDismissed = true;
+      if (state.updateTimer) { clearTimeout(state.updateTimer); state.updateTimer = null; }
+      hideUpdateBar();
+      return;
+    }
     if (action === 'import-note') { closeModal(); $('#file-note').click(); return; }
     if (action === 'import-zip') { closeModal(); $('#file-zip').click(); return; }
     if (action === 'settings') { openSettings(); return; }
@@ -1147,16 +1269,20 @@
   $('#file-photo').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
   $('#file-camera').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
   window.addEventListener('pagehide', () => { persist().catch(() => {}); stopCameraStream(); });
+  window.addEventListener('online', () => { checkForUpdate(true); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       persist().catch(() => {});
       stopCameraStream();
       if ($('#camera-video')) closeModal();
+    } else {
+      checkForUpdate(false);
     }
   });
 
   /* ---------------- Init ---------------- */
   async function init() {
+    document.documentElement.dataset.appVersion = APP_VERSION;
     let saved = null;
     try { saved = localStorage.getItem('canteen.settings'); } catch (e) { /* file:// may block */ }
     if (saved) {
@@ -1183,9 +1309,11 @@
     }
     state.view = settingsReady() ? 'home' : 'setup';
     render();
-    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW', err));
-    }
+    await setupServiceWorker();
+    setTimeout(() => checkForUpdate(true), 1800);
+    setInterval(() => {
+      if (document.visibilityState === 'visible') checkForUpdate(false);
+    }, 5 * 60 * 1000);
   }
 
   init().catch((err) => {

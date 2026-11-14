@@ -1,7 +1,7 @@
 {
-  "name": "食堂收货拍照",
-  "short_name": "食堂收货",
-  "description": "导入送货单、逐项拍照、导出收货包",
+  "name": "武汉大功率机车检修段食堂收货管理系统M1",
+  "short_name": "食堂收货M1",
+  "description": "武汉大功率机车检修段食堂收货管理系统M1：导入送货单、逐项拍照、导出收货包",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -10,8 +10,8 @@
   "theme_color": "#1f5c45",
   "lang": "zh-CN",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "icons/logo-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
