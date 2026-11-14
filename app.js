@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114113745-dbe8e56b';
+  const APP_VERSION = '20261114114057-d0dacf9c';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -1225,10 +1225,7 @@
   }
 
   async function openCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      $('#file-camera').click();
-      return;
-    }
+    const supported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
     showModal(`
       <h2>拍照</h2>
       <p class="muted">相机保持开启，可连续拍 1–5 张；离开时自动关闭。</p>
@@ -1242,8 +1239,12 @@
         <button class="btn secondary" data-action="camera-album" type="button">从相册选择</button>
         <button class="btn primary" data-action="capture-camera" id="capture-camera" type="button" disabled>拍照</button>
       </div>
-      <button class="btn ghost block" data-action="camera-native" type="button" style="margin-top:8px">用系统相机拍原图</button>
       <button class="btn ghost block" data-action="camera-done" type="button" style="margin-top:6px">完成拍照</button>`);
+    if (!supported) {
+      const err = $('#camera-error');
+      if (err) { err.hidden = false; err.textContent = '当前浏览器不支持网页相机，请从相册选择照片。'; }
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
@@ -1590,7 +1591,6 @@
     if (action === 'add-photo') { await openCamera(); return; }
     if (action === 'album-photo') { await pickAlbum(); return; }
     if (action === 'camera-album') { closeModal(); await pickAlbum(); return; }
-    if (action === 'camera-native') { closeModal(); $('#file-camera').click(); return; }
     if (action === 'camera-done') { closeModal(); render(); return; }
     if (action === 'capture-camera') { await captureCamera(); return; }
     if (action === 'delete-photo') { await deletePhoto(id); return; }
@@ -1683,7 +1683,6 @@
   $('#file-note').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; importNoteFile(f); });
   $('#file-zip').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; restoreZip(f); });
   $('#file-photo').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
-  $('#file-camera').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
   window.addEventListener('pagehide', () => { persist().catch(() => {}); stopCameraStream(); });
   window.addEventListener('online', () => { checkForUpdate(true); });
   document.addEventListener('visibilitychange', () => {
