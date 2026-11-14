@@ -231,6 +231,8 @@ button { cursor: pointer; }
 }
 .torch-btn.on { background: rgba(255, 214, 102, .92); color: #3d2a00; border-color: #ffe6a0; }
 .photo-gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.photo-viewer { margin-top: 10px; background: #0d1712; border-radius: 10px; overflow: auto; max-height: 68vh; touch-action: pinch-zoom; }
+.photo-viewer img { display: block; width: 100%; height: auto; max-height: 68vh; object-fit: contain; }
 .photo-pick { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .photo-pick img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; display: block; background: #dde6e1; }
 .photo-pick input { position: absolute; top: 5px; left: 5px; width: 20px; height: 20px; z-index: 2; }

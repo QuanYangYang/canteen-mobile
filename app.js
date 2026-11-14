@@ -5,12 +5,17 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114071326-03d4f241';
+  const APP_VERSION = '20261114105506-ae9e0c27';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const MAX_PHOTOS = 5;
   const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
+  const MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
+  const ZIP_WARN_BYTES = 220 * 1024 * 1024;
+  const ZIP_MAX_BYTES = 600 * 1024 * 1024;
+  const ZIP_COMPRESS_EDGE = 3000;
+  const ZIP_COMPRESS_QUALITY = 0.92;
 
   const state = {
     task: null,
@@ -25,6 +30,7 @@
     urls: [],
     db: null,
     cameraStream: null,
+    imageCapture: null,
     photoSelection: new Set(),
     swReg: null,
     swController: false,
@@ -34,7 +40,7 @@
     updateReloading: false,
     updateTimer: null,
   };
-  const mem = { kv: {}, photos: [] };
+  const mem = { kv: {}, photos: [], originals: new Map() };
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -83,11 +89,30 @@
     return new Promise((resolve, reject) => {
       if (!('indexedDB' in window)) return reject(new Error('no indexedDB'));
       const req = indexedDB.open(DB_NAME, DB_VERSION);
-      const timer = setTimeout(() => reject(new Error('indexedDB open timeout')), 1500);
-      req.onupgradeneeded = () => {
+      const waitMs = location.protocol === 'file:' ? 1500 : 8000;
+      const timer = setTimeout(() => reject(new Error('indexedDB open timeout')), waitMs);
+      req.onupgradeneeded = (event) => {
         const db = req.result;
+        const tx = req.transaction;
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'key' });
         if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('originals')) db.createObjectStore('originals', { keyPath: 'id' });
+        if (event && event.oldVersion < 2) {
+          const photosStore = tx.objectStore('photos');
+          const originalsStore = tx.objectStore('originals');
+          photosStore.openCursor().onsuccess = (ev) => {
+            const cursor = ev.target.result;
+            if (!cursor) return;
+            const photo = cursor.value;
+            if (photo.blob) {
+              originalsStore.put({ id: photo.id, blob: photo.blob });
+              delete photo.blob;
+              photo.legacyCompressed = true;
+              cursor.update(photo);
+            }
+            cursor.continue();
+          };
+        }
       };
       req.onsuccess = () => { clearTimeout(timer); resolve(req.result); };
       req.onerror = () => { clearTimeout(timer); reject(req.error || new Error('indexedDB open failed')); };
@@ -133,21 +158,60 @@
       req.onerror = () => reject(req.error);
     });
   }
-  async function putPhoto(photo) {
-    const idx = mem.photos.findIndex((p) => p.id === photo.id);
-    if (idx >= 0) mem.photos[idx] = photo; else mem.photos.push(photo);
+  async function putPhoto(photo, original) {
+    const clean = Object.assign({}, photo);
+    if (!original && clean.blob) original = clean.blob;
+    delete clean.blob;
+    const idx = mem.photos.findIndex((p) => p.id === clean.id);
+    if (idx >= 0) mem.photos[idx] = clean; else mem.photos.push(clean);
+    if (original) mem.originals.set(clean.id, original);
     if (!state.db) return;
-    await idbRequest('photos', 'readwrite', (os) => os.put(photo));
+    await new Promise((resolve, reject) => {
+      const tx = state.db.transaction(['photos', 'originals'], 'readwrite');
+      tx.objectStore('photos').put(clean);
+      if (original) tx.objectStore('originals').put({ id: clean.id, blob: original });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('idb photo put failed'));
+      tx.onabort = () => reject(tx.error || new Error('idb photo put aborted'));
+    });
+  }
+  async function getOriginal(id) {
+    const photo = mem.photos.find((p) => p.id === id) || state.photos.find((p) => p.id === id);
+    if (!state.db) return mem.originals.get(id) || (photo && photo.blob) || (photo && photo.thumb) || null;
+    return new Promise((resolve, reject) => {
+      const tx = state.db.transaction(['photos', 'originals'], 'readonly');
+      const req = tx.objectStore('originals').get(id);
+      const photoReq = tx.objectStore('photos').get(id);
+      tx.oncomplete = () => resolve((req.result && req.result.blob) || (photoReq.result && photoReq.result.blob) || (photoReq.result && photoReq.result.thumb) || null);
+      tx.onerror = () => reject(tx.error || new Error('idb original read failed'));
+      tx.onabort = () => reject(tx.error || new Error('idb original read aborted'));
+    });
   }
   async function delPhoto(id) {
     mem.photos = mem.photos.filter((p) => p.id !== id);
+    mem.originals.delete(id);
     if (!state.db) return;
-    await idbRequest('photos', 'readwrite', (os) => os.delete(id));
+    await new Promise((resolve, reject) => {
+      const tx = state.db.transaction(['photos', 'originals'], 'readwrite');
+      tx.objectStore('photos').delete(id);
+      tx.objectStore('originals').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('idb photo delete failed'));
+      tx.onabort = () => reject(tx.error || new Error('idb photo delete aborted'));
+    });
   }
   async function clearPhotos() {
     mem.photos = [];
+    mem.originals.clear();
     if (!state.db) return;
-    await idbRequest('photos', 'readwrite', (os) => os.clear());
+    await new Promise((resolve, reject) => {
+      const tx = state.db.transaction(['photos', 'originals'], 'readwrite');
+      tx.objectStore('photos').clear();
+      tx.objectStore('originals').clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('idb photo clear failed'));
+      tx.onabort = () => reject(tx.error || new Error('idb photo clear aborted'));
+    });
   }
 
   let saveTimer = null;
@@ -285,6 +349,13 @@
     } catch (e) { /* fallback */ }
     return loadImage(file);
   }
+  async function imageInfo(blob) {
+    const img = await decodeImage(blob);
+    const width = img.width || img.naturalWidth || 0;
+    const height = img.height || img.naturalHeight || 0;
+    if (img.close) img.close();
+    return { width, height };
+  }
   async function compressImage(file) {
     const img = await decodeImage(file);
     const w = img.width || img.naturalWidth;
@@ -306,6 +377,76 @@
     }
     if (!blob) throw new Error('图片压缩失败');
     return blob;
+  }
+  function fileExt(file) {
+    const name = String((file && file.name) || '');
+    const m = name.match(/\.([a-z0-9]+)$/i);
+    return (m ? m[1] : 'jpg').toLowerCase().replace('jpeg', 'jpg');
+  }
+  function isHeicFile(file) {
+    const type = String((file && file.type) || '').toLowerCase();
+    const ext = fileExt(file);
+    return type.includes('heic') || type.includes('heif') || ext === 'heic' || ext === 'heif';
+  }
+  async function preparePhoto(file) {
+    if (!file) throw new Error('没有选择照片');
+    if (file.size > MAX_ORIGINAL_BYTES) throw new Error('单张照片超过 25MB，请先压缩');
+    const type = String(file.type || '').toLowerCase();
+    if (type && !type.startsWith('image/') && !isHeicFile(file)) throw new Error('不是可识别的图片文件');
+    let original = file;
+    let heicConverted = false;
+    let width = 0;
+    let height = 0;
+    if (isHeicFile(file)) {
+      let img;
+      try { img = await decodeImage(file); } catch (err) {
+        throw new Error('HEIC 照片无法在此浏览器解码，请在相册中导出为 JPG 后再选');
+      }
+      width = img.width || img.naturalWidth;
+      height = img.height || img.naturalHeight;
+      if (!width || !height) throw new Error('HEIC 照片尺寸无效');
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      if (img.close) img.close();
+      const jpeg = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+      if (!jpeg) throw new Error('HEIC 转换失败');
+      if (jpeg.size > MAX_ORIGINAL_BYTES) throw new Error('HEIC 转换后超过 25MB，请先压缩');
+      const base = String(file.name || 'photo').replace(/\.[^.]+$/, '');
+      original = new File([jpeg], `${base}.jpg`, { type: 'image/jpeg' });
+      heicConverted = true;
+    } else {
+      const img = await decodeImage(original);
+      width = img.width || img.naturalWidth;
+      height = img.height || img.naturalHeight;
+      if (img.close) img.close();
+    }
+    if (!width || !height) throw new Error('图片尺寸无效');
+    const thumb = await makeThumb(original);
+    const mime = original.type || (fileExt(original) === 'png' ? 'image/png' : 'image/jpeg');
+    const ext = fileExt(original);
+    return { original, thumb, width, height, mime, ext: ext === 'jpeg' ? 'jpg' : ext, heicConverted };
+  }
+  async function compressForPackage(blob) {
+    const img = await decodeImage(blob);
+    const w = img.width || img.naturalWidth;
+    const h = img.height || img.naturalHeight;
+    if (!w || !h) throw new Error('图片尺寸无效');
+    const scale = Math.min(1, ZIP_COMPRESS_EDGE / Math.max(w, h));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    if (img.close) img.close();
+    let quality = ZIP_COMPRESS_QUALITY;
+    let out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    while (out && out.size > MAX_PHOTO_BYTES && quality > 0.72) {
+      quality -= 0.04;
+      out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    }
+    if (!out) throw new Error('高清压缩失败');
+    return out;
   }
   async function makeThumb(blob) {
     try {
@@ -501,7 +642,7 @@
     const photos = photosFor(item.id);
     const cards = photos.map((p, idx) => `
       <div class="photo-card">
-        <img src="${blobUrl(p.thumb || p.blob)}" alt="照片 ${idx + 1}">
+        <img src="${blobUrl(p.thumb || p.blob)}" alt="照片 ${idx + 1}" data-action="view-photo" data-id="${p.id}">
         <span class="seq">${idx + 1}</span>
         <button class="del" data-action="delete-photo" data-id="${p.id}" aria-label="删除照片">×</button>
       </div>`).join('');
@@ -572,6 +713,7 @@
       try { state.cameraStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* ignore */ }
       state.cameraStream = null;
     }
+    state.imageCapture = null;
   }
   function showModal(html) {
     stopCameraStream();
@@ -669,7 +811,7 @@
       const item = getItem(p.itemId);
       return `<label class="photo-pick">
         <input type="checkbox" data-photo-select value="${p.id}">
-        <img src="${blobUrl(p.thumb || p.blob)}" alt="">
+        <img src="${blobUrl(p.thumb || p.blob)}" alt="" data-action="view-photo" data-id="${p.id}">
         <span class="pmeta">${esc(item?.lineNo || '')} ${esc(item?.name || '')} · ${p.order}</span>
       </label>`;
     }).join('');
@@ -683,6 +825,23 @@
       <div class="photo-gallery">${cards}</div>
       <div class="modal-actions"><button class="btn secondary" data-action="close-modal">关闭</button></div>`);
     syncPhotoSelection();
+  }
+
+  async function viewPhoto(id) {
+    const photo = state.photos.find((p) => p.id === id);
+    if (!photo) return;
+    const item = getItem(photo.itemId);
+    const blob = await getOriginal(id);
+    if (!blob) { toast('原图已不在本机，只能查看缩略图'); return; }
+    const url = blobUrl(blob);
+    const dims = photo.width && photo.height ? `${photo.width} × ${photo.height}` : '原图';
+    const size = blob.size ? `${(blob.size / (1024 * 1024)).toFixed(2)} MB` : '';
+    showModal(`
+      <h2>${esc(item?.name || '照片')} · ${esc(photo.order)}</h2>
+      <p class="muted">${esc(item?.lineNo || '')} · ${esc(dims)} ${size ? '· ' + esc(size) : ''}${photo.legacyCompressed ? ' · 旧版压缩图' : ''}</p>
+      <div class="photo-viewer"><img src="${url}" alt="${esc(item?.name || '收货照片')}"></div>
+      <div class="modal-actions"><button class="btn secondary" data-action="close-modal">关闭</button></div>
+      <p class="small muted" style="margin-top:8px">可双指缩放查看细节。</p>`);
   }
 
   async function deleteSelectedPhotos(ids) {
@@ -817,6 +976,7 @@
       }));
       const byLine = new Map(items.map((i) => [i.lineKey, i]));
       const photos = [];
+      const originals = new Map();
       for (const name of names) {
         if (!/^照片\/.*\.(jpg|jpeg|png|webp)$/i.test(name)) continue;
         if (entries[name].length === 0) continue;
@@ -826,7 +986,17 @@
         if (!item) continue;
         const blob = new Blob([entries[name]], { type: mimeFromName(name) });
         const thumb = await makeThumb(blob);
-        photos.push({ id: uid(), taskId: task.id, itemId: item.id, order: info.seq || 1, blob, thumb, createdAt: nowText(now) });
+        const dims = await imageInfo(blob).catch(() => ({ width: 0, height: 0 }));
+        const lower = name.toLowerCase();
+        const ext = lower.endsWith('.png') ? 'png' : lower.endsWith('.webp') ? 'webp' : 'jpg';
+        const photo = {
+          id: uid(), taskId: task.id, itemId: item.id, order: info.seq || 1,
+          thumb, width: dims.width, height: dims.height, bytes: blob.size,
+          mime: blob.type || mimeFromName(name), ext, source: 'restore',
+          heicConverted: false, legacyCompressed: false, createdAt: nowText(now),
+        };
+        photos.push(photo);
+        originals.set(photo.id, blob);
       }
       const counts = {};
       for (const p of photos) counts[p.itemId] = (counts[p.itemId] || 0) + 1;
@@ -842,7 +1012,7 @@
       state.lastZip = null;
       state.zipName = '';
       await persist();
-      for (const p of photos) await putPhoto(p);
+      for (const p of photos) await putPhoto(p, originals.get(p.id));
       unbusy();
       render();
       toast(`已恢复 ${items.length} 项、${photos.length} 张照片`);
@@ -867,42 +1037,76 @@
   }
 
   /* ---------------- Zip ---------------- */
-  async function buildZip() {
+  function estimatedOriginalBytes() {
+    return state.photos.reduce((sum, p) => sum + Number(p.bytes || 2 * 1024 * 1024), 0);
+  }
+
+  async function buildZip(compress) {
     if (!state.task) throw new Error('没有任务');
     if (!allDone()) throw new Error('还有货品未完成');
     refreshItemAmounts();
     const items = state.items.slice().sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
     const totalPhotos = allPhotosCount();
     const xlsx = CanteenWorkbook.buildWorkbook(state.task, items, totalPhotos);
-    const files = {};
     const noteName = `修改后送货单_${state.task.noteNo || '送货单'}.xlsx`;
-    files[noteName] = [new Uint8Array(xlsx), { level: 6 }];
+    const chunks = [];
+    let resolveZip;
+    let rejectZip;
+    const done = new Promise((resolve, reject) => { resolveZip = resolve; rejectZip = reject; });
+    const zip = new fflate.Zip((err, chunk, final) => {
+      if (err) { rejectZip(err); return; }
+      if (chunk) chunks.push(chunk);
+      if (final) resolveZip(new Blob(chunks, { type: 'application/zip' }));
+    });
+    function addZipFile(name, bytes) {
+      if (!bytes || !bytes.length) return;
+      const entry = new fflate.ZipPassThrough(name);
+      zip.add(entry);
+      entry.push(bytes, true);
+    }
+    addZipFile(noteName, new Uint8Array(xlsx));
     const photos = state.photos.slice().sort((a, b) => {
       const ia = getItem(a.itemId), ib = getItem(b.itemId);
       return (Number(ia && ia.lineNo) - Number(ib && ib.lineNo)) || (a.order - b.order);
     });
-    for (const p of photos) {
+    for (let i = 0; i < photos.length; i++) {
+      const p = photos[i];
       const item = getItem(p.itemId);
       if (!item) continue;
+      $('#busy-text').textContent = `正在打包照片 ${i + 1}/${photos.length}…`;
+      const original = await getOriginal(p.id);
+      if (!original) continue;
+      let blob = original;
+      if (compress) blob = await compressForPackage(original);
       const line = String(item.lineNo).padStart(2, '0');
       const base = `${state.task.locationCode}-${state.task.timeToken}-${line}`;
-      const name = `照片/${base}${p.order > 1 ? '-' + p.order : ''}.jpg`;
-      const bytes = new Uint8Array(await p.blob.arrayBuffer());
-      files[name] = [bytes, { level: 0 }];
+      const ext = compress ? 'jpg' : (p.ext || 'jpg');
+      const name = `照片/${base}${p.order > 1 ? '-' + p.order : ''}.${ext}`;
+      addZipFile(name, new Uint8Array(await blob.arrayBuffer()));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    const zipped = fflate.zipSync(files);
-    state.lastZip = new Blob([zipped], { type: 'application/zip' });
-    state.zipName = `收货包_${state.task.locationCode}_${state.task.noteNo || '送货单'}_${state.task.timeToken}.zip`;
+    zip.end();
+    state.lastZip = await done;
+    state.zipName = `收货包_${state.task.locationCode}_${state.task.noteNo || '送货单'}_${state.task.timeToken}${compress ? '_高清压缩' : '_原图'}.zip`;
     return state.lastZip;
   }
 
   async function generateZip() {
     busy('正在生成收货包…');
     try {
-      await buildZip();
+      const total = estimatedOriginalBytes();
+      let compress = false;
+      if (total > ZIP_MAX_BYTES) {
+        compress = true;
+        toast('照片总量超过 600MB，将生成高清压缩包');
+      } else if (total > ZIP_WARN_BYTES) {
+        const mb = Math.round(total / (1024 * 1024));
+        compress = !window.confirm(`原图包约 ${mb}MB，旧手机可能导出失败。\n\n点“确定”继续原图；点“取消”生成高清压缩版（长边3000px，通常更小）。`);
+      }
+      await buildZip(compress);
       unbusy();
       render();
-      toast('收货包已生成');
+      toast(compress ? '高清压缩收货包已生成' : '原图收货包已生成');
     } catch (err) {
       unbusy();
       showError('生成失败', err);
@@ -950,13 +1154,19 @@
       const file = list[idx];
       $('#busy-text').textContent = `正在处理照片 ${idx + 1}/${list.length}…`;
       try {
-        if (!file.type || !file.type.startsWith('image/')) throw new Error('不是图片文件');
-        const blob = await compressImage(file);
-        const thumb = await makeThumb(blob);
+        const prepared = await preparePhoto(file);
         const order = photosFor(item.id).length + 1;
-        const photo = { id: uid(), taskId: item.taskId, itemId: item.id, order, blob, thumb, createdAt: nowText() };
+        const photo = {
+          id: uid(), taskId: item.taskId, itemId: item.id, order,
+          thumb: prepared.thumb, width: prepared.width, height: prepared.height,
+          bytes: prepared.original.size, mime: prepared.mime, ext: prepared.ext,
+          source: file.name && file.name.startsWith('camera-') ? 'camera' : 'album',
+          heicConverted: prepared.heicConverted,
+          legacyCompressed: false,
+          createdAt: nowText(),
+        };
         state.photos.push(photo);
-        await putPhoto(photo);
+        await putPhoto(photo, prepared.original);
         item.photoCount = photosFor(item.id).length;
         refreshItem(item);
         added++;
@@ -988,10 +1198,11 @@
         <button class="btn secondary" data-action="camera-album" type="button">从相册选择</button>
         <button class="btn primary" data-action="capture-camera" id="capture-camera" type="button" disabled>拍照</button>
       </div>
-      <button class="btn ghost block" data-action="camera-done" type="button" style="margin-top:8px">完成拍照</button>`);
+      <button class="btn ghost block" data-action="camera-native" type="button" style="margin-top:8px">用系统相机拍原图</button>
+      <button class="btn ghost block" data-action="camera-done" type="button" style="margin-top:6px">完成拍照</button>`);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
         audio: false,
       });
       const video = $('#camera-video');
@@ -1005,6 +1216,10 @@
       const btn = $('#capture-camera');
       if (btn) btn.disabled = false;
       const track = stream.getVideoTracks()[0];
+      state.imageCapture = null;
+      if (window.ImageCapture && track) {
+        try { state.imageCapture = new window.ImageCapture(track); } catch (e) { state.imageCapture = null; }
+      }
       const caps = track && track.getCapabilities ? track.getCapabilities() : {};
       const torch = $('#torch-btn');
       if (torch && caps && caps.torch) {
@@ -1051,14 +1266,20 @@
 
   async function captureCamera() {
     const video = $('#camera-video');
-    if (!video || !video.videoWidth || !video.videoHeight) { toast('相机还没有准备好'); return; }
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    let blob = null;
+    if (state.imageCapture && state.imageCapture.takePhoto) {
+      try { blob = await state.imageCapture.takePhoto(); } catch (e) { blob = null; }
+    }
+    if (!blob) {
+      if (!video || !video.videoWidth || !video.videoHeight) { toast('相机还没有准备好'); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    }
     if (!blob) { toast('拍照失败，请重试'); return; }
-    const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    const file = new File([blob], `camera-${Date.now()}.${blob.type === 'image/png' ? 'png' : 'jpg'}`, { type: blob.type || 'image/jpeg' });
     await addPhotos([file]);
     const item = getItem(state.selectedId);
     const count = item ? photosFor(item.id).length : 0;
@@ -1252,6 +1473,7 @@
     if (action === 'import-zip') { closeModal(); $('#file-zip').click(); return; }
     if (action === 'settings') { openSettings(); return; }
     if (action === 'all-photos') { openPhotoGallery(); return; }
+    if (action === 'view-photo') { await viewPhoto(id); return; }
     if (action === 'short-list') { openShortList(); return; }
     if (action === 'remark-list') { openRemarkList(); return; }
     if (action === 'photo-select-all') {
@@ -1323,6 +1545,7 @@
     if (action === 'add-photo') { await openCamera(); return; }
     if (action === 'album-photo') { await pickAlbum(); return; }
     if (action === 'camera-album') { closeModal(); await pickAlbum(); return; }
+    if (action === 'camera-native') { closeModal(); $('#file-camera').click(); return; }
     if (action === 'camera-done') { closeModal(); render(); return; }
     if (action === 'capture-camera') { await captureCamera(); return; }
     if (action === 'delete-photo') { await deletePhoto(id); return; }
