@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114105743-ae9e0c27';
+  const APP_VERSION = '20261114111709-8c80514e';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -651,7 +651,12 @@
       <div class="card">
         <div class="photo-head">
           <div class="line-no">${esc(item.lineNo)}</div>
-          <div class="item-title"><div class="name">${esc(item.name)}</div><div class="meta">${esc(item.unit || '')} · 实送 ${fmtNum(item.qtyReceived)}</div></div>
+          <div class="item-title">
+            <div class="title-line">
+              <span class="name">${esc(item.name)}</span>
+              <span class="inline-meta">实送 ${fmtNum(item.qtyReceived)} ${esc(item.unit || '')}</span>
+            </div>
+          </div>
           ${item.short ? '<span class="badge amber">缺送</span>' : ''}
         </div>
         ${item.receiveRemark ? `<div class="remark-preview ${item.short ? 'amber' : ''}">${esc(item.receiveRemark)}</div>` : ''}
