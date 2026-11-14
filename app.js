@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114112238-a40f489f';
+  const APP_VERSION = '20261114113745-dbe8e56b';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -73,6 +73,9 @@
   function formatPhotoTime(value) {
     const t = photoTimeToken(value);
     return `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
+  }
+  function safeFilePart(value) {
+    return String(value || '').replace(/[\\/:*?"<>|]/g, '_').trim() || '未设置';
   }
   function nowText(d) {
     const x = d || new Date();
@@ -1114,15 +1117,21 @@
       let blob = original;
       if (compress) blob = await compressForPackage(original);
       const line = String(item.lineNo).padStart(2, '0');
-      const base = `${state.task.locationCode}-${photoTimeToken(state.task.timeToken)}-${line}`;
+      const stamp = String(state.task.timeToken || '').replace(/\D/g, '');
+      const fallbackDate = String(state.task.startedAt || nowText()).slice(0, 10).replace(/-/g, '');
+      const dateTime = stamp.length >= 14
+        ? `${stamp.slice(0, 8)}-${stamp.slice(8, 14)}`
+        : `${fallbackDate}-${stamp.padStart(6, '0').slice(-6)}`;
+      const base = `${state.task.locationCode}-${dateTime}-${line}-${p.order}`;
       const ext = compress ? 'jpg' : (p.ext || 'jpg');
-      const name = `照片/${base}${p.order > 1 ? '-' + p.order : ''}.${ext}`;
+      const name = `照片/${base}.${ext}`;
       addZipFile(name, new Uint8Array(await blob.arrayBuffer()));
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     zip.end();
     state.lastZip = await done;
-    state.zipName = `收货包_${state.task.locationCode}_${state.task.noteNo || '送货单'}_${state.task.timeToken}${compress ? '_高清压缩' : '_原图'}.zip`;
+    const day = String(state.task.startedAt || '').slice(0, 10).replace(/-/g, '') || nowToken().slice(0, 8);
+    state.zipName = `${state.task.locationCode}-${day}-${safeFilePart(state.task.operator)}${compress ? '-高清压缩' : ''}.zip`;
     return state.lastZip;
   }
 
