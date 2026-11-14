@@ -3,7 +3,7 @@
   'use strict';
 
   const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
-  const APP_VERSION = '20261114063137-2640b21f';
+  const APP_VERSION = '20261114063538-05362902';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
@@ -349,7 +349,7 @@
   }
 
   function renderSetup(view) {
-    setHeader(APP_NAME, '先设置收货地点和验收人员');
+    setHeader('收货前设置', '先设置收货地点和验收人员');
     view.innerHTML = `
       <section class="card">
         <h2>收货前设置</h2>
