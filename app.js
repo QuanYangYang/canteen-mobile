@@ -3,7 +3,7 @@
   'use strict';
 
   const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
-  const APP_VERSION = '20261114061420-ded1e122';
+  const APP_VERSION = '20261114061808-e5cdbb61';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
@@ -1104,6 +1104,7 @@
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (state.updateReloading) return;
         if (!state.swController) { state.swController = true; return; }
+        if (!canAutoReload()) { showUpdateFound(); return; }
         state.updateReloading = true;
         persist().catch(() => {}).finally(() => location.reload());
       });
