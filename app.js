@@ -3,7 +3,7 @@
   'use strict';
 
   const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
-  const APP_VERSION = '20261114061808-e5cdbb61';
+  const APP_VERSION = '20261114063137-2640b21f';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
@@ -428,7 +428,7 @@
   function renderList(view) {
     const t = state.task;
     if (!t) { state.view = 'home'; render(); return; }
-    setHeader(t.company || '货品列表', `${t.noteNo} · 共 ${t.pageCount || 1} 页`);
+    setHeader('收货', '');
     const p = taskProgress();
     const keyword = state.search.trim().toLowerCase();
     const match = (i) => {
@@ -445,8 +445,11 @@
           <div class="item-head">
             <div class="line-no">${esc(i.lineNo)}</div>
             <div class="item-title">
-              <div class="name">${esc(i.name)}</div>
-              <div class="meta">${esc(i.code || '无编号')} · ${esc(i.unit || '')} · 订购 ${fmtNum(i.qtyOrdered)}</div>
+              <div class="title-line">
+                <span class="name">${esc(i.name)}</span>
+                <span class="inline-meta">${esc(i.unit || '')} · 订购 ${fmtNum(i.qtyOrdered)}</span>
+              </div>
+              <div class="meta">${esc(i.code || '无编号')}</div>
             </div>
             ${i.short ? '<span class="badge amber">缺送</span>' : (itemDone(i) ? '<span class="badge">已完成</span>' : `<span class="badge gray">${photos ? photos + ' 张' : '待拍照'}</span>`)}
           </div>
@@ -465,8 +468,7 @@
     };
     view.innerHTML = `
       <div class="card">
-        <div class="btn-row" style="justify-content:space-between">
-          <span class="badge ${t.status === 'submitted' ? 'amber' : ''}">${t.status === 'submitted' ? '已提交' : '收货中'}</span>
+        <div class="btn-row" style="justify-content:flex-end">
           <span class="muted small mono">${esc(t.noteNo)}</span>
         </div>
         <p class="muted" style="margin:7px 0 0">${esc(t.date || '')} · ${esc(t.customer || '')}</p>
