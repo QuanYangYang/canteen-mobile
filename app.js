@@ -2,8 +2,10 @@
 (function () {
   'use strict';
 
-  const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
-  const APP_VERSION = '20261114064245-49dd2dab';
+  const BRAND_ORG = '武汉大功率机车检修段';
+  const BRAND_PRODUCT = '食堂收货管理系统M1';
+  const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
+  const APP_VERSION = '20261114071326-03d4f241';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
@@ -23,6 +25,7 @@
     urls: [],
     db: null,
     cameraStream: null,
+    photoSelection: new Set(),
     swReg: null,
     swController: false,
     updateChecking: false,
@@ -203,6 +206,9 @@
   function shortCount() {
     return state.items.filter((i) => i.short).length;
   }
+  function remarkCount() {
+    return state.items.filter((i) => (i.receiveRemark || '').trim()).length;
+  }
   function getItem(id) { return state.items.find((i) => i.id === id) || null; }
   function sortItems() {
     state.items.sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
@@ -331,14 +337,17 @@
 
   /* ---------------- Render shell ---------------- */
   function setHeader(title, sub) {
-    $('#top-title').textContent = title;
-    $('#top-sub').textContent = sub || '';
+    const t = $('#top-title');
+    const s = $('#top-sub');
+    if (t) t.textContent = title;
+    if (s) s.textContent = sub || '';
   }
   function render() {
     revokeUrls();
     const view = $('#view');
     $('#back-btn').hidden = state.view === 'home' || state.view === 'setup';
-    $('#settings-btn').hidden = state.view === 'setup';
+    const loc = $('#top-location-code');
+    if (loc) loc.textContent = state.settings.locationCode || '未设置';
     if (state.view === 'setup') renderSetup(view);
     else if (state.view === 'home') renderHome(view);
     else if (state.view === 'list') renderList(view);
@@ -387,9 +396,9 @@
           <div class="progress-label"><span>已完成 ${p.done} / ${p.total}</span><span>${p.pct}%</span></div>
           <div class="progress"><i style="width:${p.pct}%"></i></div>
           <div class="stat-row">
-            <div class="stat"><b>${allPhotosCount()}</b><span>照片</span></div>
-            <div class="stat"><b>${shortCount()}</b><span>缺送</span></div>
-            <div class="stat"><b>${t.pageCount || 1}</b><span>单据页</span></div>
+            <button class="stat stat-btn" type="button" data-action="all-photos"><b>${allPhotosCount()}</b><span>照片</span></button>
+            <button class="stat stat-btn" type="button" data-action="short-list"><b>${shortCount()}</b><span>缺送</span></button>
+            <button class="stat stat-btn" type="button" data-action="remark-list"><b>${remarkCount()}</b><span>备注信息</span></button>
           </div>
           <div class="btn-row">
             ${submitted
@@ -401,13 +410,13 @@
     view.innerHTML = `
       <section class="hero card">
         <img class="hero-logo" src="icons/logo-192.png" alt="${esc(APP_NAME)}">
-        <h1>${esc(APP_NAME)}</h1>
+        <h1><span class="line">${esc(BRAND_ORG)}</span><span class="line">${esc(BRAND_PRODUCT)}</span></h1>
         <p>导入当天送货单 · 逐项拍照 · 导出收货包</p>
         <div class="stack">
           <button class="btn primary block" data-action="import-note">导入送货单</button>
           <button class="btn secondary block" data-action="import-zip">导入回传包</button>
         </div>
-        <p class="small muted" style="margin-top:14px">只处理一张单，可包含多页；数据保存在本机。</p>
+        <p class="small muted" style="margin-top:14px">所有数据在本地运行，不上传，不产生流量</p>
       </section>
       ${isFile ? `<div class="card" style="border-color:#d9a441;background:#fff8e8">
         <b>离线单文件模式</b>
@@ -616,6 +625,91 @@
     ta.addEventListener('input', () => { $('#remark-count').textContent = ta.value.length; });
     setTimeout(() => ta.focus(), 80);
   }
+  function openShortList() {
+    const list = state.items.filter((i) => i.short);
+    const rows = list.map((i) => `<div class="mini-row"><span class="mini-line">${esc(i.lineNo)}</span><div><div class="mini-name">${esc(i.name)}</div></div></div>`).join('');
+    showModal(`
+      <h2>缺送货品</h2>
+      <p class="muted">共 ${list.length} 项</p>
+      ${list.length ? `<div class="mini-list">${rows}</div>` : '<p class="small muted" style="margin-top:12px">暂无缺送货品。</p>'}
+      <div class="modal-actions"><button class="btn secondary" data-action="close-modal">关闭</button></div>`);
+  }
+
+  function openRemarkList() {
+    const list = state.items.filter((i) => (i.receiveRemark || '').trim());
+    const rows = list.map((i) => `<div class="mini-row"><span class="mini-line">${esc(i.lineNo)}</span><div><div class="mini-name">${esc(i.name)}</div><div class="mini-note">${esc(i.receiveRemark)}</div></div></div>`).join('');
+    showModal(`
+      <h2>已备注货品</h2>
+      <p class="muted">共 ${list.length} 项</p>
+      ${list.length ? `<div class="mini-list">${rows}</div>` : '<p class="small muted" style="margin-top:12px">暂无备注信息。</p>'}
+      <div class="modal-actions"><button class="btn secondary" data-action="close-modal">关闭</button></div>`);
+  }
+
+  function syncPhotoSelection() {
+    const boxes = Array.from(document.querySelectorAll('[data-photo-select]'));
+    state.photoSelection = new Set(boxes.filter((x) => x.checked).map((x) => x.value));
+    const n = state.photoSelection.size;
+    const count = $('#photo-sel-count');
+    if (count) count.textContent = String(n);
+    const del = $('#photo-delete-selected');
+    if (del) del.disabled = n === 0;
+    const allBtn = $('#photo-select-all');
+    if (allBtn) allBtn.textContent = boxes.length && boxes.every((x) => x.checked) ? '取消全选' : '全选';
+  }
+
+  function openPhotoGallery() {
+    const photos = state.photos.slice().sort((a, b) => {
+      const ia = getItem(a.itemId);
+      const ib = getItem(b.itemId);
+      return (Number(ia?.lineNo || 0) - Number(ib?.lineNo || 0)) || (a.order - b.order);
+    });
+    state.photoSelection = new Set();
+    if (!photos.length) { closeModal(); toast('还没有已拍照片'); return; }
+    const cards = photos.map((p) => {
+      const item = getItem(p.itemId);
+      return `<label class="photo-pick">
+        <input type="checkbox" data-photo-select value="${p.id}">
+        <img src="${blobUrl(p.thumb || p.blob)}" alt="">
+        <span class="pmeta">${esc(item?.lineNo || '')} ${esc(item?.name || '')} · ${p.order}</span>
+      </label>`;
+    }).join('');
+    showModal(`
+      <h2>全部照片</h2>
+      <p class="muted">共 ${photos.length} 张，可多选删除</p>
+      <div class="modal-actions">
+        <button class="btn secondary" id="photo-select-all" type="button" data-action="photo-select-all">全选</button>
+        <button class="btn danger" id="photo-delete-selected" type="button" data-action="photo-delete-selected" disabled>删除选中（<span id="photo-sel-count">0</span>）</button>
+      </div>
+      <div class="photo-gallery">${cards}</div>
+      <div class="modal-actions"><button class="btn secondary" data-action="close-modal">关闭</button></div>`);
+    syncPhotoSelection();
+  }
+
+  async function deleteSelectedPhotos(ids) {
+    const affected = new Set();
+    for (const photoId of ids) {
+      const photo = state.photos.find((p) => p.id === photoId);
+      if (!photo) continue;
+      affected.add(photo.itemId);
+      await delPhoto(photoId);
+      state.photos = state.photos.filter((p) => p.id !== photoId);
+    }
+    for (const itemId of affected) {
+      const item = getItem(itemId);
+      const list = photosFor(itemId);
+      for (let i = 0; i < list.length; i++) {
+        list[i].order = i + 1;
+        await putPhoto(list[i]);
+      }
+      if (item) {
+        item.photoCount = list.length;
+        refreshItem(item);
+      }
+    }
+    await persist();
+    render();
+  }
+
   function openSubmit() {
     if (!allDone()) { toast(`还有 ${state.items.length - doneCount()} 项未完成`); return; }
     showModal(`
@@ -884,7 +978,10 @@
     showModal(`
       <h2>拍照</h2>
       <p class="muted">相机保持开启，可连续拍 1–5 张；离开时自动关闭。</p>
-      <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
+      <div class="camera-stage">
+        <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
+        <button class="torch-btn" id="torch-btn" type="button" data-action="toggle-torch" hidden>手电筒</button>
+      </div>
       <div id="camera-count" class="camera-count">已拍 0 / 5</div>
       <div id="camera-error" class="notice red" hidden></div>
       <div class="modal-actions">
@@ -907,6 +1004,15 @@
       await video.play().catch(() => {});
       const btn = $('#capture-camera');
       if (btn) btn.disabled = false;
+      const track = stream.getVideoTracks()[0];
+      const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+      const torch = $('#torch-btn');
+      if (torch && caps && caps.torch) {
+        torch.hidden = false;
+        torch.dataset.on = '0';
+        torch.classList.remove('on');
+        torch.textContent = '手电筒';
+      }
       const item = getItem(state.selectedId);
       const count = item ? photosFor(item.id).length : 0;
       const counter = $('#camera-count');
@@ -964,6 +1070,23 @@
     const counter = $('#camera-count');
     if (counter) counter.textContent = `已拍 ${count} / 5`;
     toast(`已添加，当前 ${count} / 5`);
+  }
+
+  async function toggleTorch() {
+    const track = state.cameraStream && state.cameraStream.getVideoTracks
+      ? state.cameraStream.getVideoTracks()[0]
+      : null;
+    const btn = $('#torch-btn');
+    if (!track || !btn) return;
+    const on = btn.dataset.on !== '1';
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+      btn.dataset.on = on ? '1' : '0';
+      btn.classList.toggle('on', on);
+      btn.textContent = on ? '关闭手电筒' : '手电筒';
+    } catch (err) {
+      toast('当前设备或浏览器不支持手电筒');
+    }
   }
 
   async function deletePhoto(photoId) {
@@ -1128,6 +1251,26 @@
     if (action === 'import-note') { closeModal(); $('#file-note').click(); return; }
     if (action === 'import-zip') { closeModal(); $('#file-zip').click(); return; }
     if (action === 'settings') { openSettings(); return; }
+    if (action === 'all-photos') { openPhotoGallery(); return; }
+    if (action === 'short-list') { openShortList(); return; }
+    if (action === 'remark-list') { openRemarkList(); return; }
+    if (action === 'photo-select-all') {
+      const boxes = Array.from(document.querySelectorAll('[data-photo-select]'));
+      const all = boxes.length && boxes.every((x) => x.checked);
+      boxes.forEach((x) => { x.checked = !all; });
+      syncPhotoSelection();
+      return;
+    }
+    if (action === 'photo-delete-selected') {
+      const ids = Array.from(state.photoSelection);
+      if (!ids.length) { toast('请先选择照片'); return; }
+      if (!window.confirm(`删除选中的 ${ids.length} 张照片？`)) return;
+      await deleteSelectedPhotos(ids);
+      openPhotoGallery();
+      toast('已删除选中的照片');
+      return;
+    }
+    if (action === 'toggle-torch') { await toggleTorch(); return; }
     if (action === 'save-setup') {
       if (!applySettings($('#setup-location').value, $('#setup-operator').value)) return;
       state.view = 'home';
@@ -1249,6 +1392,10 @@
     render();
   });
 
+  document.addEventListener('change', (e) => {
+    if (e.target.matches('[data-photo-select]')) syncPhotoSelection();
+  });
+
   document.addEventListener('input', (e) => {
     if (e.target.id === 'search') {
       state.search = e.target.value;
@@ -1265,7 +1412,6 @@
     else state.view = 'home';
     render();
   });
-  $('#settings-btn').addEventListener('click', openSettings);
   $('#file-note').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; importNoteFile(f); });
   $('#file-zip').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; restoreZip(f); });
   $('#file-photo').addEventListener('change', (e) => { const files = Array.from(e.target.files); e.target.value = ''; addPhotos(files); });
