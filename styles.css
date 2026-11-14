@@ -256,6 +256,9 @@ button { cursor: pointer; }
 .meta-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #eef2ef; font-size: 12px; }
 .meta-row span:first-child { color: var(--muted); flex: 0 0 auto; }
 .meta-row span:last-child { text-align: right; overflow-wrap: anywhere; }
+.receive-time-row { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.receive-time-row strong { color: var(--ink, #1f2d26); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 600; }
+.link-btn { border: 0; background: transparent; color: var(--green); font-size: 12px; padding: 2px 0 2px 8px; cursor: pointer; }
 
 .toast {
   position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); z-index: 120;

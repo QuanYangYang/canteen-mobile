@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114111709-8c80514e';
+  const APP_VERSION = '20261114112238-a40f489f';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -65,6 +65,14 @@
   function nowToken(d) {
     const x = d || new Date();
     return `${x.getFullYear()}${pad2(x.getMonth() + 1)}${pad2(x.getDate())}-${pad2(x.getHours())}${pad2(x.getMinutes())}${pad2(x.getSeconds())}`;
+  }
+  function photoTimeToken(value) {
+    const digits = String(value || '').replace(/\D/g, '');
+    return digits.length >= 6 ? digits.slice(-6) : nowToken().replace(/\D/g, '').slice(-6);
+  }
+  function formatPhotoTime(value) {
+    const t = photoTimeToken(value);
+    return `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
   }
   function nowText(d) {
     const x = d || new Date();
@@ -623,6 +631,7 @@
         <p class="muted" style="margin:7px 0 0">${esc(t.date || '')} · ${esc(t.customer || '')}</p>
         <div class="progress-label"><span>已完成 ${p.done} / ${p.total}</span><span>${p.pct}%</span></div>
         <div class="progress"><i style="width:${p.pct}%"></i></div>
+        <div class="receive-time-row"><span>收货时间 <strong>${formatPhotoTime(t.timeToken)}</strong></span><button class="link-btn" data-action="edit-time">修改</button></div>
       </div>
       <div class="toolbar">
         <div class="search"><span>⌕</span><input id="search" type="search" placeholder="搜索品名 / 编号" value="${esc(state.search)}"></div>
@@ -755,6 +764,27 @@
     state.settings.operator = operator;
     try { localStorage.setItem('canteen.settings', JSON.stringify(state.settings)); } catch (e) { /* file:// may block */ }
     return true;
+  }
+  async function editReceiveTime() {
+    const task = state.task;
+    if (!task) return;
+    const current = photoTimeToken(task.timeToken);
+    const input = window.prompt('收货时间（24 小时制，例如 09:00 或 09:00:30）', `${current.slice(0, 2)}:${current.slice(2, 4)}:${current.slice(4, 6)}`);
+    if (input === null) return;
+    const m = String(input).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m) { toast('时间格式应为 HH:MM 或 HH:MM:SS'); return; }
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    const ss = Number(m[3] || 0);
+    if (hh > 23 || mm > 59 || ss > 59) { toast('时间超出范围'); return; }
+    const t = `${pad2(hh)}${pad2(mm)}${pad2(ss)}`;
+    const date = String(task.startedAt || nowText()).slice(0, 10);
+    task.timeToken = `${date.replace(/-/g, '')}-${t}`;
+    task.startedAt = `${date} ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
+    state.lastZip = null;
+    await persist();
+    render();
+    toast(`收货时间已改为 ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`);
   }
   function openRemark(itemId) {
     const item = getItem(itemId);
@@ -1084,7 +1114,7 @@
       let blob = original;
       if (compress) blob = await compressForPackage(original);
       const line = String(item.lineNo).padStart(2, '0');
-      const base = `${state.task.locationCode}-${state.task.timeToken}-${line}`;
+      const base = `${state.task.locationCode}-${photoTimeToken(state.task.timeToken)}-${line}`;
       const ext = compress ? 'jpg' : (p.ext || 'jpg');
       const name = `照片/${base}${p.order > 1 ? '-' + p.order : ''}.${ext}`;
       addZipFile(name, new Uint8Array(await blob.arrayBuffer()));
@@ -1477,6 +1507,7 @@
     if (action === 'import-note') { closeModal(); $('#file-note').click(); return; }
     if (action === 'import-zip') { closeModal(); $('#file-zip').click(); return; }
     if (action === 'settings') { openSettings(); return; }
+    if (action === 'edit-time') { await editReceiveTime(); return; }
     if (action === 'all-photos') { openPhotoGallery(); return; }
     if (action === 'view-photo') { await viewPhoto(id); return; }
     if (action === 'short-list') { openShortList(); return; }
