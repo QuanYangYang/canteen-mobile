@@ -3,7 +3,7 @@
   'use strict';
 
   const APP_NAME = '武汉大功率机车检修段食堂收货管理系统M1';
-  const APP_VERSION = '20261114063538-05362902';
+  const APP_VERSION = '20261114064245-49dd2dab';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 1;
@@ -447,9 +447,8 @@
             <div class="item-title">
               <div class="title-line">
                 <span class="name">${esc(i.name)}</span>
-                <span class="inline-meta">${esc(i.unit || '')} · 订购 ${fmtNum(i.qtyOrdered)}</span>
+                <span class="inline-meta">订购 ${fmtNum(i.qtyOrdered)} ${esc(i.unit || '')}</span>
               </div>
-              <div class="meta">${esc(i.code || '无编号')}</div>
             </div>
             ${i.short ? '<span class="badge amber">缺送</span>' : (itemDone(i) ? '<span class="badge">已完成</span>' : `<span class="badge gray">${photos ? photos + ' 张' : '待拍照'}</span>`)}
           </div>
@@ -502,7 +501,7 @@
       <div class="card">
         <div class="photo-head">
           <div class="line-no">${esc(item.lineNo)}</div>
-          <div class="item-title"><div class="name">${esc(item.name)}</div><div class="meta">${esc(item.code || '')} · ${esc(item.unit || '')} · 实送 ${fmtNum(item.qtyReceived)}</div></div>
+          <div class="item-title"><div class="name">${esc(item.name)}</div><div class="meta">${esc(item.unit || '')} · 实送 ${fmtNum(item.qtyReceived)}</div></div>
           ${item.short ? '<span class="badge amber">缺送</span>' : ''}
         </div>
         ${item.receiveRemark ? `<div class="remark-preview ${item.short ? 'amber' : ''}">${esc(item.receiveRemark)}</div>` : ''}
