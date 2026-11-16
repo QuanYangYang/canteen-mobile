@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261114114057-d0dacf9c';
+  const APP_VERSION = '20261116130314-dd218786';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -16,6 +16,23 @@
   const ZIP_MAX_BYTES = 600 * 1024 * 1024;
   const ZIP_COMPRESS_EDGE = 3000;
   const ZIP_COMPRESS_QUALITY = 0.92;
+
+  // 收货地点固定为两处：本段收菜 65 / 驱动收菜 66（地点码用于照片编号与导出表）
+  const LOCATIONS = [
+    { code: '65', name: '本段收菜' },
+    { code: '66', name: '驱动收菜' },
+  ];
+  function locationLabel(code) {
+    const value = String(code || '');
+    const found = LOCATIONS.find((l) => l.code === value);
+    return found ? found.name + found.code : value;
+  }
+  function locationOptionsHtml(selected) {
+    const cur = String(selected || '');
+    const known = LOCATIONS.some((l) => l.code === cur);
+    const legacy = !known && cur ? `<option value="${esc(cur)}" selected>当前地点 ${esc(cur)}</option>` : '';
+    return legacy + LOCATIONS.map((l) => `<option value="${l.code}"${l.code === cur ? ' selected' : ''}>${l.name}${l.code}</option>`).join('');
+  }
 
   const state = {
     task: null,
@@ -254,6 +271,8 @@
   }
   function recalcAmount(item) {
     if (item.short) { item.amount = 0; return; }
+    // 补录过单价的货品：金额始终按 实送数 × 补录单价 重算
+    if (item.priceManual) { item.amount = round2(Number(item.qtyReceived || 0) * Number(item.price || 0)); return; }
     const importedQty = item.importedQty;
     const unchanged = importedQty !== undefined && Math.abs(Number(item.qtyReceived || 0) - Number(importedQty || 0)) < 1e-9;
     item.amount = unchanged
@@ -307,7 +326,7 @@
       customer: parsed.customer,
       fileName: fileName || parsed.fileName || '',
       sourceHash: sourceHash || '',
-      locationCode: state.settings.locationCode || '01',
+      locationCode: state.settings.locationCode || LOCATIONS[0].code,
       locationName: '',
       operator: state.settings.operator || '',
       timeToken: nowToken(d),
@@ -330,6 +349,7 @@
       qtyReceived: Number(x.qtyReceived || 0),
       price: x.price === '' ? 0 : Number(x.price),
       amount: Number(x.amount || 0),
+      priceManual: false,
       importedQty: Number(x.qtyReceived || 0),
       importedAmount: Number(x.amount || 0),
       remark: x.remark || '',
@@ -499,7 +519,7 @@
     const view = $('#view');
     $('#back-btn').hidden = state.view === 'home' || state.view === 'setup';
     const loc = $('#top-location-code');
-    if (loc) loc.textContent = state.settings.locationCode || '未设置';
+    if (loc) loc.textContent = state.settings.locationCode ? locationLabel(state.settings.locationCode) : '未设置';
     if (state.view === 'setup') renderSetup(view);
     else if (state.view === 'home') renderHome(view);
     else if (state.view === 'list') renderList(view);
@@ -516,8 +536,8 @@
         <h2>收货前设置</h2>
         <p class="muted">地点和验收人员会写入每一条导出的货品记录，也用于照片编号。</p>
         <div class="field">
-          <label for="setup-location">收货地点 / 地点码</label>
-          <input id="setup-location" maxlength="20" value="${esc(state.settings.locationCode)}" placeholder="如 食堂、065">
+          <label for="setup-location">收货地点</label>
+          <select id="setup-location">${locationOptionsHtml(state.settings.locationCode || LOCATIONS[0].code)}</select>
         </div>
         <div class="field">
           <label for="setup-operator">验收人员</label>
@@ -529,7 +549,7 @@
   }
 
   function renderHome(view) {
-    setHeader(APP_NAME, state.settings.locationCode ? `地点 ${state.settings.locationCode}` : '未设置地点');
+    setHeader(APP_NAME, state.settings.locationCode ? `地点 ${locationLabel(state.settings.locationCode)}` : '未设置地点');
     const isFile = location.protocol === 'file:';
     const storageIssue = !state.db && !isFile;
     const t = state.task;
@@ -579,7 +599,7 @@
       </div>` : ''}
       ${current}
       <div class="card">
-        <div class="settings-row"><span>收货地点</span><span class="mono">${esc(state.settings.locationCode || '未设置')}</span></div>
+        <div class="settings-row"><span>收货地点</span><span class="mono">${esc(state.settings.locationCode ? locationLabel(state.settings.locationCode) : '未设置')}</span></div>
         <div class="settings-row"><span>验收人员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
         <button class="btn ghost small" data-action="settings" style="margin-top:8px">修改设置</button>
       </div>
@@ -601,8 +621,11 @@
     const done = visible.filter((i) => itemDone(i));
     const itemHtml = (i) => {
       const photos = i.photoCount || 0;
+      const price = Number(i.price || 0);
+      const zeroPrice = !(price > 0);
+      const amount = Number(i.amount || 0);
       return `
-        <article class="item ${itemDone(i) ? 'done' : ''} ${i.short ? 'short' : ''}" data-id="${i.id}">
+        <article class="item ${itemDone(i) ? 'done' : ''} ${i.short ? 'short' : ''} ${zeroPrice && !i.short ? 'price-zero' : ''}" data-id="${i.id}">
           <div class="item-head">
             <div class="line-no">${esc(i.lineNo)}</div>
             <div class="item-title">
@@ -620,9 +643,15 @@
               <span class="photo-trigger-sub">${i.short ? '—' : photos + ' / 5'}</span>
             </button>
           </div>
+          <div class="price-row">
+            <span>单价 <b>¥${price.toFixed(2)}</b></span>
+            <span>金额 <b>¥${amount.toFixed(2)}</b></span>
+            ${zeroPrice ? '<span class="badge amber">单价为 0，请补录</span>' : ''}
+          </div>
           ${i.receiveRemark ? `<div class="remark-preview ${i.short ? 'amber' : ''}">${esc(i.receiveRemark)}</div>` : ''}
           <div class="item-actions">
             <button class="btn small secondary" data-action="remark" data-id="${i.id}">备注${i.receiveRemark ? ' ✓' : ''}</button>
+            ${i.short ? '' : `<button class="btn small ${zeroPrice ? 'primary' : 'secondary'}" data-action="price" data-id="${i.id}">${zeroPrice ? '补录单价' : '修改单价'}</button>`}
           </div>
         </article>`;
     };
@@ -715,7 +744,7 @@
       <div class="card">
         <h3>收货信息</h3>
         <div class="meta-list">
-          <div class="meta-row"><span>收货地点</span><span>${esc(t.locationCode)}</span></div>
+          <div class="meta-row"><span>收货地点</span><span>${esc(locationLabel(t.locationCode))}</span></div>
           <div class="meta-row"><span>验收人员</span><span>${esc(t.operator || '未设置')}</span></div>
           <div class="meta-row"><span>开始时间</span><span>${esc(t.startedAt)}</span></div>
           <div class="meta-row"><span>提交时间</span><span>${esc(t.submittedAt || '')}</span></div>
@@ -751,7 +780,7 @@
     showModal(`
       <h2>设置</h2>
       <p class="muted">收货地点用于照片编号；验收人员会写入导出的每一条货品记录。</p>
-      <div class="field"><label>收货地点 / 地点码</label><input id="set-location" maxlength="20" value="${esc(state.settings.locationCode)}" placeholder="如 食堂、065"></div>
+      <div class="field"><label>收货地点</label><select id="set-location">${locationOptionsHtml(state.settings.locationCode || LOCATIONS[0].code)}</select></div>
       <div class="field"><label>验收人员</label><input id="set-operator" maxlength="30" value="${esc(state.settings.operator)}" placeholder="姓名或工号"></div>
       <div class="modal-actions">
         <button class="btn secondary" data-action="close-modal">取消</button>
@@ -761,7 +790,7 @@
   function applySettings(codeInput, operatorInput) {
     const code = normalizeLocation(codeInput);
     const operator = String(operatorInput || '').trim();
-    if (!code) { toast('请填写收货地点'); return false; }
+    if (!code) { toast('请选择收货地点'); return false; }
     if (!operator) { toast('请填写验收人员'); return false; }
     state.settings.locationCode = code;
     state.settings.operator = operator;
@@ -804,6 +833,30 @@
     const ta = $('#remark-text');
     ta.addEventListener('input', () => { $('#remark-count').textContent = ta.value.length; });
     setTimeout(() => ta.focus(), 80);
+  }
+  function openPrice(itemId) {
+    const item = getItem(itemId);
+    if (!item) return;
+    const qty = Number(item.qtyReceived || 0);
+    const current = Number(item.price || 0);
+    showModal(`
+      <h2>${current > 0 ? '修改单价' : '补录单价'}</h2>
+      <p class="muted">${esc(item.name)} · 序号 ${esc(item.lineNo)}</p>
+      <div class="notice">送货单里这一行单价为 0，请按实际价格补录；补录后金额 = 实送数 × 单价。</div>
+      <div class="field" style="margin-top:12px"><label for="price-input">补录单价（元）</label><input id="price-input" inputmode="decimal" value="${current > 0 ? current.toFixed(2) : ''}" placeholder="如 12.50"></div>
+      <div class="price-calc">实送数 <b>${fmtNum(qty)}</b> ${esc(item.unit || '')} × 单价 <b id="price-calc-price">¥${current.toFixed(2)}</b> = 金额 <b id="price-calc-amount">¥${round2(qty * current).toFixed(2)}</b></div>
+      <div class="modal-actions">
+        <button class="btn secondary" data-action="close-modal">取消</button>
+        <button class="btn primary" data-action="save-price" data-id="${item.id}">保存</button>
+      </div>`);
+    const input = $('#price-input');
+    const update = () => {
+      const value = Number(String(input.value || '').replace(/[^\d.]/g, '')) || 0;
+      $('#price-calc-price').textContent = '¥' + value.toFixed(2);
+      $('#price-calc-amount').textContent = '¥' + round2(qty * value).toFixed(2);
+    };
+    input.addEventListener('input', update);
+    setTimeout(() => input.focus(), 80);
   }
   function openShortList() {
     const list = state.items.filter((i) => i.short);
@@ -993,7 +1046,7 @@
         customer: parsed.task.customer || '',
         fileName: file.name,
         sourceHash: parsed.task.sourceHash || '',
-        locationCode: parsed.task.locationCode || state.settings.locationCode || '01',
+        locationCode: parsed.task.locationCode || state.settings.locationCode || LOCATIONS[0].code,
         locationName: parsed.task.locationName || '',
         operator: parsed.task.operator || state.settings.operator || '',
         timeToken: tokenFromText(parsed.task.startedAt || nowText(now)),
@@ -1007,6 +1060,7 @@
         lineNo: x.lineNo, lineKey: x.lineKey, code: x.code, name: x.name,
         qtyOrdered: x.qtyOrdered, unit: x.unit, qtyReceived: x.qtyReceived,
         price: x.price, amount: x.amount,
+        priceManual: false,
         importedQty: Number(x.qtyReceived || 0), importedAmount: Number(x.amount || 0),
         remark: x.remark || '', receiveRemark: x.receiveRemark || '',
         short: !!x.short, preShortQty: null, preShortAmount: null,
@@ -1568,6 +1622,25 @@
     if (action === 'remark') {
       const item = getItem(id);
       if (item) openRemark(id);
+      return;
+    }
+    if (action === 'price') {
+      if (getItem(id)) openPrice(id);
+      return;
+    }
+    if (action === 'save-price') {
+      const item = getItem(id);
+      if (!item) return;
+      const raw = String($('#price-input').value || '').trim().replace(/[^\d.]/g, '');
+      const price = Number(raw);
+      if (!raw || !Number.isFinite(price) || price <= 0) { toast('请输入大于 0 的单价'); return; }
+      item.price = round2(price);
+      item.priceManual = true;
+      recalcAmount(item);
+      await persist();
+      closeModal();
+      render();
+      toast(`单价 ¥${item.price.toFixed(2)}，金额 ¥${Number(item.amount || 0).toFixed(2)}`);
       return;
     }
     if (action === 'save-remark') {

@@ -35,8 +35,8 @@ PWA 的离线缓存和“添加到主屏幕”都要求 HTTPS，这是浏览器�
 
 三、兼容性
 - 推荐浏览器：Safari（iPhone）、Chrome（Android）、Edge（Windows/Android）。
-- iPhone：iOS 15+ Safari；拍照调用系统相机/相册，最多 5 张/货品。
-- Android：Chrome/Edge 100+；同样调用系统相机/相册。
+- iPhone：iOS 15+ Safari；使用网页相机（需授权）或相册，最多 5 张/货品。
+- Android：Chrome/Edge 100+；使用网页相机（需授权）或相册。
 - 不依赖手机品牌；不要用微信内置浏览器安装，请用系统浏览器打开。
 - 首次打开需联网加载页面；安装并缓存后可离线使用。
 - 电脑端仍为 Windows 10/11 x64；Win7 本轮不做。
