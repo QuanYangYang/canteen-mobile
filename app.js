@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261116130314-dd218786';
+  const APP_VERSION = '20261116132213-1c747e7d';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -651,7 +651,7 @@
           ${i.receiveRemark ? `<div class="remark-preview ${i.short ? 'amber' : ''}">${esc(i.receiveRemark)}</div>` : ''}
           <div class="item-actions">
             <button class="btn small secondary" data-action="remark" data-id="${i.id}">备注${i.receiveRemark ? ' ✓' : ''}</button>
-            ${i.short ? '' : `<button class="btn small ${zeroPrice ? 'primary' : 'secondary'}" data-action="price" data-id="${i.id}">${zeroPrice ? '补录单价' : '修改单价'}</button>`}
+            ${zeroPrice && !i.short ? `<button class="btn small primary" data-action="price" data-id="${i.id}">补录单价</button>` : ''}
           </div>
         </article>`;
     };
@@ -840,7 +840,7 @@
     const qty = Number(item.qtyReceived || 0);
     const current = Number(item.price || 0);
     showModal(`
-      <h2>${current > 0 ? '修改单价' : '补录单价'}</h2>
+      <h2>补录单价</h2>
       <p class="muted">${esc(item.name)} · 序号 ${esc(item.lineNo)}</p>
       <div class="notice">送货单里这一行单价为 0，请按实际价格补录；补录后金额 = 实送数 × 单价。</div>
       <div class="field" style="margin-top:12px"><label for="price-input">补录单价（元）</label><input id="price-input" inputmode="decimal" value="${current > 0 ? current.toFixed(2) : ''}" placeholder="如 12.50"></div>
