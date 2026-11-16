@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261116133152-1c747e7d';
+  const APP_VERSION = '20261116134220-0933d987';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -623,7 +623,6 @@
       const photos = i.photoCount || 0;
       const price = Number(i.price || 0);
       const zeroPrice = !(price > 0);
-      const amount = Number(i.amount || 0);
       return `
         <article class="item ${itemDone(i) ? 'done' : ''} ${i.short ? 'short' : ''} ${zeroPrice && !i.short ? 'price-zero' : ''}" data-id="${i.id}">
           <div class="item-head">
@@ -642,11 +641,6 @@
               <span class="photo-trigger-main">${i.short ? '缺送免拍' : (photos ? '继续拍照' : '拍照')}</span>
               <span class="photo-trigger-sub">${i.short ? '—' : photos + ' / 5'}</span>
             </button>
-          </div>
-          <div class="price-row">
-            <span>单价 <b>¥${price.toFixed(2)}</b></span>
-            <span>金额 <b>¥${amount.toFixed(2)}</b></span>
-            ${zeroPrice ? '<span class="badge amber">单价为 0，请补录</span>' : ''}
           </div>
           ${i.receiveRemark ? `<div class="remark-preview ${i.short ? 'amber' : ''}">${esc(i.receiveRemark)}</div>` : ''}
           <div class="item-actions">
