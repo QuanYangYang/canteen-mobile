@@ -8,7 +8,8 @@
 })(typeof self !== 'undefined' ? self : this, function (XLSX) {
   'use strict';
 
-  const HEADERS = ['序号', '编号', '品名及规格', '订购数', '单位', '实送数', '单价', '金额（元）', '备注', '收货备注', '缺送', '收货地点', '验收人员'];
+  // 备注列只有一个：用手机端填写的「收货备注」覆盖原送货单备注，不再单列「收货备注」。
+  const HEADERS = ['序号', '编号', '品名及规格', '订购数', '单位', '实送数', '单价', '金额（元）', '备注', '缺送', '收货地点', '验收人员'];
   const META_SHEET = '收货信息';
   const NOTE_SHEET = '送货单';
 
@@ -56,7 +57,6 @@
         num(item.qtyReceived),
         num(item.price),
         num(item.amount),
-        text(item.remark),
         text(item.receiveRemark),
         item.short ? '是' : '否',
         text(task.locationName || task.locationCode),
@@ -67,7 +67,7 @@
     ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: HEADERS.length - 1 } }];
     ws['!cols'] = [
       { wch: 6 }, { wch: 10 }, { wch: 28 }, { wch: 8 }, { wch: 6 },
-      { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 14 }, { wch: 20 }, { wch: 6 },
+      { wch: 8 }, { wch: 8 }, { wch: 11 }, { wch: 24 }, { wch: 6 },
       { wch: 12 }, { wch: 12 },
     ];
     ws['!rows'] = [{ hpt: 26 }, { hpt: 30 }];
@@ -86,12 +86,12 @@
           cell.s = style({ bold: true, fill: 'FFE8F0EA' });
           continue;
         }
-        const align = (c === 2 || c === 8 || c === 9 || c === 11 || c === 12) ? 'left' : 'center';
-        cell.s = style({ align, bold: c === 10 && cell.v === '是' });
+        const align = (c === 2 || c === 8 || c === 10 || c === 11) ? 'left' : 'center';
+        cell.s = style({ align, bold: c === 9 && cell.v === '是' });
       }
     }
     const lastRow = aoa.length;
-    ws['!ref'] = `A1:M${lastRow}`;
+    ws['!ref'] = `A1:L${lastRow}`;
     XLSX.utils.book_append_sheet(wb, ws, NOTE_SHEET);
 
     const meta = [
@@ -166,6 +166,11 @@
           receiveRemark: cells.indexOf('收货备注'),
           short: cells.indexOf('缺送'),
         };
+        // 兼容旧包：旧格式有「备注 + 收货备注」两列；新格式只有「备注」，内容就是收货备注
+        if (map.receiveRemark < 0 && map.remark >= 0) {
+          map.receiveRemark = map.remark;
+          map.remark = -1;
+        }
         break;
       }
     }
