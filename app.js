@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261116134220-0933d987';
+  const APP_VERSION = '20261119120649-5ed0246e';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -327,7 +327,7 @@
       fileName: fileName || parsed.fileName || '',
       sourceHash: sourceHash || '',
       locationCode: state.settings.locationCode || LOCATIONS[0].code,
-      locationName: '',
+      locationName: locationLabel(state.settings.locationCode || LOCATIONS[0].code),
       operator: state.settings.operator || '',
       timeToken: nowToken(d),
       startedAt: nowText(d),
@@ -781,14 +781,50 @@
         <button class="btn primary" data-action="save-settings">保存</button>
       </div>`);
   }
-  function applySettings(codeInput, operatorInput) {
+  /**
+   * 保存设置，并把“地点 + 验收人员”同步到当前收货单：
+   * 照片文件名、ZIP 文件名、送货单收货信息表都按新地点码/验收人重新生成，
+   * 已生成过的收货包会作废，需要重新生成。
+   */
+  async function applySettings(codeInput, operatorInput) {
     const code = normalizeLocation(codeInput);
     const operator = String(operatorInput || '').trim();
     if (!code) { toast('请选择收货地点'); return false; }
     if (!operator) { toast('请填写验收人员'); return false; }
+    const prevCode = state.settings.locationCode;
+    const prevOperator = state.settings.operator;
     state.settings.locationCode = code;
     state.settings.operator = operator;
     try { localStorage.setItem('canteen.settings', JSON.stringify(state.settings)); } catch (e) { /* file:// may block */ }
+
+    const task = state.task;
+    let synced = false;
+    if (task) {
+      if (task.locationCode !== code) {
+        task.locationCode = code;
+        task.locationName = locationLabel(code);
+        synced = true;
+      }
+      if (!task.locationName) {
+        task.locationName = locationLabel(task.locationCode);
+        synced = true;
+      }
+      if (task.operator !== operator) {
+        task.operator = operator;
+        synced = true;
+      }
+      if (synced) {
+        // 包名和照片名都在生成时按地点码/验收人计算，作废旧包让用户重新生成
+        state.lastZip = null;
+        state.zipName = '';
+        await persist();
+      }
+    }
+    if (synced && prevCode && prevCode !== code) {
+      toast(`收货地点已改为 ${locationLabel(code)}，照片和收货包将按新地点码输出`);
+    } else if (synced && prevOperator !== operator) {
+      toast(`验收人员已改为 ${operator}`);
+    }
     return true;
   }
   async function editReceiveTime() {
@@ -1041,7 +1077,7 @@
         fileName: file.name,
         sourceHash: parsed.task.sourceHash || '',
         locationCode: parsed.task.locationCode || state.settings.locationCode || LOCATIONS[0].code,
-        locationName: parsed.task.locationName || '',
+        locationName: parsed.task.locationName || locationLabel(parsed.task.locationCode || state.settings.locationCode || LOCATIONS[0].code),
         operator: parsed.task.operator || state.settings.operator || '',
         timeToken: tokenFromText(parsed.task.startedAt || nowText(now)),
         startedAt: parsed.task.startedAt || nowText(now),
@@ -1588,14 +1624,14 @@
     }
     if (action === 'toggle-torch') { await toggleTorch(); return; }
     if (action === 'save-setup') {
-      if (!applySettings($('#setup-location').value, $('#setup-operator').value)) return;
+      if (!(await applySettings($('#setup-location').value, $('#setup-operator').value))) return;
       state.view = 'home';
       render();
       toast('设置已保存，可以开始收货');
       return;
     }
     if (action === 'save-settings') {
-      if (!applySettings($('#set-location').value, $('#set-operator').value)) return;
+      if (!(await applySettings($('#set-location').value, $('#set-operator').value))) return;
       closeModal();
       render();
       toast('设置已保存');
