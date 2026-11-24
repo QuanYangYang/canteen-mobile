@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261119123949-0cc4b24d';
+  const APP_VERSION = '20261124054347-e1337b9b';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -16,6 +16,10 @@
   const ZIP_MAX_BYTES = 600 * 1024 * 1024;
   const ZIP_COMPRESS_EDGE = 3000;
   const ZIP_COMPRESS_QUALITY = 0.92;
+  // 压缩版收货包：照片压到约 100KB，允许 72–120KB 浮动
+  const ZIP_COMPRESSED_TARGET_BYTES = 100 * 1024;
+  const ZIP_COMPRESSED_MAX_BYTES = 120 * 1024;
+  const ZIP_COMPRESSED_MIN_BYTES = 72 * 1024;
 
   // 收货地点固定为两处：本段收菜 65 / 驱动收菜 66（地点码用于照片编号与导出表）
   const LOCATIONS = [
@@ -43,7 +47,9 @@
     selectedId: null,
     search: '',
     lastZip: null,
+    lastZipc: null,
     zipName: '',
+    zipNamec: '',
     urls: [],
     db: null,
     cameraStream: null,
@@ -108,6 +114,11 @@
     el.hidden = false;
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => { el.hidden = true; }, ms || 2400);
+  }
+  function fmtSize(bytes) {
+    const n = Number(bytes) || 0;
+    if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + ' MB';
+    return Math.max(1, Math.round(n / 1024)) + ' KB';
   }
   function busy(text) { $('#busy-text').textContent = text || '处理中…'; $('#busy').hidden = false; }
   function unbusy() { $('#busy').hidden = true; }
@@ -451,7 +462,13 @@
       const img = await decodeImage(original);
       width = img.width || img.naturalWidth;
       height = img.height || img.naturalHeight;
+      // 同一张已解码的图直接做缩略图，避免再解码一遍
+      const thumb = await makeThumbFrom(img);
       if (img.close) img.close();
+      if (!width || !height) throw new Error('图片尺寸无效');
+      const mime = original.type || (fileExt(original) === 'png' ? 'image/png' : 'image/jpeg');
+      const ext = fileExt(original);
+      return { original, thumb, width, height, mime, ext: ext === 'jpeg' ? 'jpg' : ext, heicConverted };
     }
     if (!width || !height) throw new Error('图片尺寸无效');
     const thumb = await makeThumb(original);
@@ -460,6 +477,16 @@
     return { original, thumb, width, height, mime, ext: ext === 'jpeg' ? 'jpg' : ext, heicConverted };
   }
   async function compressForPackage(blob) {
+    // 已经够小、长边在 3000 以内的照片直接原样打包，省掉手机上的重复解码/编码。
+    if (blob.size <= 1.5 * 1024 * 1024) {
+      const im = await decodeImage(blob).catch(() => null);
+      if (im) {
+        const w = im.width || im.naturalWidth;
+        const h = im.height || im.naturalHeight;
+        if (im.close) im.close();
+        if (w && h && Math.max(w, h) <= 3000) return blob;
+      }
+    }
     const img = await decodeImage(blob);
     const w = img.width || img.naturalWidth;
     const h = img.height || img.naturalHeight;
@@ -479,20 +506,76 @@
     if (!out) throw new Error('高清压缩失败');
     return out;
   }
+  async function compressForCompressedPackage(blob) {
+    // 已经小于上限的照片直接用原图字节，避免多编码一次损失清晰度
+    if (blob && blob.size > 0 && blob.size <= ZIP_COMPRESSED_MAX_BYTES) return blob;
+    const img = await decodeImage(blob);
+    const w = img.width || img.naturalWidth;
+    const h = img.height || img.naturalHeight;
+    if (!w || !h) throw new Error('图片尺寸无效');
+    // 先按目标体积估一个缩放比例：JPEG q≈0.7 大约是 0.13 字节/像素
+    let scale = Math.min(1, Math.sqrt((ZIP_COMPRESSED_TARGET_BYTES / 0.13) / (w * h)));
+    let best = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(w * scale));
+      canvas.height = Math.max(1, Math.round(h * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      let out = null;
+      for (let quality = 0.74; quality >= 0.44; quality -= 0.06) {
+        out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+        if (!out) break;
+        if (out.size <= ZIP_COMPRESSED_MAX_BYTES) break;
+        out = null;
+      }
+      if (out) {
+        if (!best || Math.abs(out.size - ZIP_COMPRESSED_TARGET_BYTES) < Math.abs(best.size - ZIP_COMPRESSED_TARGET_BYTES)) best = out;
+        if (out.size >= ZIP_COMPRESSED_MIN_BYTES && out.size <= ZIP_COMPRESSED_MAX_BYTES) break;
+      }
+      const tooBig = !out || out.size > ZIP_COMPRESSED_MAX_BYTES;
+      scale = Math.max(0.15, Math.min(1, tooBig ? scale * 0.8 : scale * 1.15));
+    }
+    // 体积明显偏小时，按比例把尺寸抬回来再补几次，尽量贴近 100KB 而不是一味偏小
+    if (best && best.size < ZIP_COMPRESSED_MIN_BYTES) {
+      const ratio = Math.sqrt(ZIP_COMPRESSED_TARGET_BYTES / Math.max(1, best.size));
+      const retryScale = Math.max(0.15, Math.min(2, (scale * ratio) || 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(w * retryScale));
+      canvas.height = Math.max(1, Math.round(h * retryScale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      for (const quality of [0.8, 0.72, 0.64, 0.56]) {
+        const out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+        if (!out) break;
+        if (!best || Math.abs(out.size - ZIP_COMPRESSED_TARGET_BYTES) < Math.abs(best.size - ZIP_COMPRESSED_TARGET_BYTES)) best = out;
+        if (out.size >= ZIP_COMPRESSED_MIN_BYTES && out.size <= ZIP_COMPRESSED_MAX_BYTES) break;
+      }
+    }
+    if (img.close) img.close();
+    if (!best) throw new Error('照片压缩失败');
+    return best;
+  }
   async function makeThumb(blob) {
     try {
       const img = await decodeImage(blob);
+      return await makeThumbFrom(img);
+    } catch (e) {
+      return blob;
+    }
+  }
+  // 用已解码的图直接生成缩略图（不再重复解码，手机上能省一半时间）
+  async function makeThumbFrom(img) {
+    try {
       const w = img.width || img.naturalWidth;
       const h = img.height || img.naturalHeight;
+      if (!w || !h) return null;
       const scale = Math.min(1, 360 / Math.max(w, h));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(w * scale));
       canvas.height = Math.max(1, Math.round(h * scale));
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      if (img.close) img.close();
       return await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.7));
     } catch (e) {
-      return blob;
+      return null;
     }
   }
 
@@ -718,6 +801,7 @@
     setHeader('收货包', t.noteNo || '');
     const p = taskProgress();
     const ready = !!state.lastZip;
+    const readyBoth = ready && !!state.lastZipc;
     view.innerHTML = `
       <div class="card export-box">
         <div class="big-icon">${ready ? '📦' : '⏳'}</div>
@@ -729,7 +813,7 @@
           <div class="stat"><b>${shortCount()}</b><span>缺送</span></div>
         </div>
         <div class="btn-row" style="flex-direction:column">
-          <button class="btn primary block" data-action="download-zip" ${ready ? '' : 'disabled'}>下载收货包 ZIP</button>
+          <button class="btn primary block" data-action="download-zip" ${ready ? '' : 'disabled'}>下载收货包 ZIP（原图 + 压缩版）</button>
           ${!ready ? '<button class="btn secondary block" data-action="regenerate-zip">生成收货包</button>' : ''}
           <button class="btn danger block" data-action="clear-task">我已保存，清空手机数据</button>
         </div>
@@ -742,7 +826,8 @@
           <div class="meta-row"><span>验收人员</span><span>${esc(t.operator || '未设置')}</span></div>
           <div class="meta-row"><span>开始时间</span><span>${esc(t.startedAt)}</span></div>
           <div class="meta-row"><span>提交时间</span><span>${esc(t.submittedAt || '')}</span></div>
-          <div class="meta-row"><span>文件</span><span>${esc(state.zipName || '')}</span></div>
+          <div class="meta-row"><span>文件</span><span>${esc(state.zipName || '')}${ready ? ' · ' + fmtSize(state.lastZip.size) : ''}</span></div>
+          <div class="meta-row"><span>压缩版</span><span>${state.zipNamec ? esc(state.zipNamec) + ' · ' + fmtSize(state.lastZipc ? state.lastZipc.size : 0) : '未生成'}</span></div>
         </div>
       </div>`;
   }
@@ -816,7 +901,9 @@
       if (synced) {
         // 包名和照片名都在生成时按地点码/验收人计算，作废旧包让用户重新生成
         state.lastZip = null;
+        state.lastZipc = null;
         state.zipName = '';
+        state.zipNamec = '';
         await persist();
       }
     }
@@ -844,6 +931,7 @@
     task.timeToken = `${date.replace(/-/g, '')}-${t}`;
     task.startedAt = `${date} ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
     state.lastZip = null;
+    state.lastZipc = null;
     await persist();
     render();
     toast(`收货时间已改为 ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`);
@@ -1029,7 +1117,9 @@
       state.view = 'list';
       state.search = '';
       state.lastZip = null;
+      state.lastZipc = null;
       state.zipName = '';
+      state.zipNamec = '';
       await persist();
       unbusy();
       render();
@@ -1132,7 +1222,9 @@
       state.view = 'list';
       state.search = '';
       state.lastZip = null;
+      state.lastZipc = null;
       state.zipName = '';
+      state.zipNamec = '';
       await persist();
       for (const p of photos) await putPhoto(p, originals.get(p.id));
       unbusy();
@@ -1152,7 +1244,9 @@
     state.items = [];
     state.photos = [];
     state.lastZip = null;
+    state.lastZipc = null;
     state.zipName = '';
+    state.zipNamec = '';
     await delKV('task');
     await delKV('items');
     await clearPhotos();
@@ -1163,14 +1257,22 @@
     return state.photos.reduce((sum, p) => sum + Number(p.bytes || 2 * 1024 * 1024), 0);
   }
 
-  async function buildZip(compress) {
-    if (!state.task) throw new Error('没有任务');
-    if (!allDone()) throw new Error('还有货品未完成');
-    refreshItemAmounts();
-    const items = state.items.slice().sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
-    const totalPhotos = allPhotosCount();
-    const xlsx = CanteenWorkbook.buildWorkbook(state.task, items, totalPhotos);
-    const noteName = `修改后送货单_${state.task.noteNo || '送货单'}.xlsx`;
+  function photoBaseName(item, photo) {
+    const line = String(item.lineNo).padStart(2, '0');
+    const stamp = String(state.task.timeToken || '').replace(/\D/g, '');
+    const fallbackDate = String(state.task.startedAt || nowText()).slice(0, 10).replace(/-/g, '');
+    const dateTime = stamp.length >= 14
+      ? `${stamp.slice(0, 8)}-${stamp.slice(8, 14)}`
+      : `${fallbackDate}-${stamp.padStart(6, '0').slice(-6)}`;
+    return `${state.task.locationCode}-${dateTime}-${line}-${photo.order}`;
+  }
+  function packagePhotos() {
+    return state.photos.slice().sort((a, b) => {
+      const ia = getItem(a.itemId), ib = getItem(b.itemId);
+      return (Number(ia && ia.lineNo) - Number(ib && ib.lineNo)) || (a.order - b.order);
+    });
+  }
+  function createZipSink() {
     const chunks = [];
     let resolveZip;
     let rejectZip;
@@ -1180,17 +1282,25 @@
       if (chunk) chunks.push(chunk);
       if (final) resolveZip(new Blob(chunks, { type: 'application/zip' }));
     });
-    function addZipFile(name, bytes) {
+    function addFile(name, bytes) {
       if (!bytes || !bytes.length) return;
       const entry = new fflate.ZipPassThrough(name);
       zip.add(entry);
       entry.push(bytes, true);
     }
-    addZipFile(noteName, new Uint8Array(xlsx));
-    const photos = state.photos.slice().sort((a, b) => {
-      const ia = getItem(a.itemId), ib = getItem(b.itemId);
-      return (Number(ia && ia.lineNo) - Number(ib && ib.lineNo)) || (a.order - b.order);
-    });
+    return { zip, done, addFile };
+  }
+  async function buildZip(compress) {
+    if (!state.task) throw new Error('没有任务');
+    if (!allDone()) throw new Error('还有货品未完成');
+    refreshItemAmounts();
+    const items = state.items.slice().sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
+    const totalPhotos = allPhotosCount();
+    const xlsx = CanteenWorkbook.buildWorkbook(state.task, items, totalPhotos);
+    const noteName = `修改后送货单_${state.task.noteNo || '送货单'}.xlsx`;
+    const sink = createZipSink();
+    sink.addFile(noteName, new Uint8Array(xlsx));
+    const photos = packagePhotos();
     for (let i = 0; i < photos.length; i++) {
       const p = photos[i];
       const item = getItem(p.itemId);
@@ -1200,25 +1310,47 @@
       if (!original) continue;
       let blob = original;
       if (compress) blob = await compressForPackage(original);
-      const line = String(item.lineNo).padStart(2, '0');
-      const stamp = String(state.task.timeToken || '').replace(/\D/g, '');
-      const fallbackDate = String(state.task.startedAt || nowText()).slice(0, 10).replace(/-/g, '');
-      const dateTime = stamp.length >= 14
-        ? `${stamp.slice(0, 8)}-${stamp.slice(8, 14)}`
-        : `${fallbackDate}-${stamp.padStart(6, '0').slice(-6)}`;
-      const base = `${state.task.locationCode}-${dateTime}-${line}-${p.order}`;
       const ext = compress ? 'jpg' : (p.ext || 'jpg');
-      const name = `照片/${base}.${ext}`;
-      addZipFile(name, new Uint8Array(await blob.arrayBuffer()));
+      const name = `照片/${photoBaseName(item, p)}.${ext}`;
+      sink.addFile(name, new Uint8Array(await blob.arrayBuffer()));
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    zip.end();
-    state.lastZip = await done;
+    sink.zip.end();
+    state.lastZip = await sink.done;
     const day = String(state.task.startedAt || '').slice(0, 10).replace(/-/g, '') || nowToken().slice(0, 8);
     state.zipName = `${state.task.locationCode}-${day}-${safeFilePart(state.task.operator)}${compress ? '-高清压缩' : ''}.zip`;
     return state.lastZip;
   }
 
+  async function buildCompressedZip(compress) {
+    if (!state.task) throw new Error('没有任务');
+    if (!allDone()) throw new Error('还有货品未完成');
+    refreshItemAmounts();
+    const items = state.items.slice().sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
+    const totalPhotos = allPhotosCount();
+    const xlsx = CanteenWorkbook.buildWorkbook(state.task, items, totalPhotos);
+    const noteName = `修改后送货单_${state.task.noteNo || '送货单'}.xlsx`;
+    const sink = createZipSink();
+    // 非照片文件（送货单）原样复制，不改名、不压缩
+    sink.addFile(noteName, new Uint8Array(xlsx));
+    const photos = packagePhotos();
+    for (let i = 0; i < photos.length; i++) {
+      const p = photos[i];
+      const item = getItem(p.itemId);
+      if (!item) continue;
+      $('#busy-text').textContent = `正在生成压缩版照片 ${i + 1}/${photos.length}…`;
+      const original = await getOriginal(p.id);
+      if (!original) continue;
+      const small = await compressForCompressedPackage(original);
+      const ext = compress ? 'jpg' : (p.ext || 'jpg');
+      sink.addFile(`照片/${photoBaseName(item, p)}压缩版.${ext}`, new Uint8Array(await small.arrayBuffer()));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    sink.zip.end();
+    state.lastZipc = await sink.done;
+    state.zipNamec = `${String(state.zipName || '收货包.zip').replace(/\.zip$/i, '')}压缩版.zip`;
+    return state.lastZipc;
+  }
   async function generateZip() {
     busy('正在生成收货包…');
     try {
@@ -1231,10 +1363,24 @@
         const mb = Math.round(total / (1024 * 1024));
         compress = !window.confirm(`原图包约 ${mb}MB，旧手机可能导出失败。\n\n点“确定”继续原图；点“取消”生成高清压缩版（长边3000px，通常更小）。`);
       }
+      // 1) 原有收货包：生成逻辑、命名、照片质量全部不变
       await buildZip(compress);
+      // 2) 压缩版收货包：照片压到约 100KB；失败不影响原包
+      state.lastZipc = null;
+      state.zipNamec = '';
+      let compressedError = '';
+      try {
+        await buildCompressedZip(compress);
+      } catch (err) {
+        compressedError = (err && err.message) || '压缩版生成失败';
+      }
       unbusy();
       render();
-      toast(compress ? '高清压缩收货包已生成' : '原图收货包已生成');
+      if (state.lastZipc) {
+        toast(`${compress ? '高清压缩收货包' : '原图收货包'}已生成；压缩版 ${fmtSize(state.lastZipc.size)} 已生成`);
+      } else {
+        toast(`收货包已生成；压缩版没生成：${compressedError}`, 4200);
+      }
     } catch (err) {
       unbusy();
       showError('生成失败', err);
@@ -1242,31 +1388,41 @@
   }
   async function downloadZip() {
     if (!state.lastZip) { toast('请先生成收货包'); return; }
-    const name = state.zipName || '收货包.zip';
+    const files = [{ blob: state.lastZip, name: state.zipName || '收货包.zip' }];
+    if (state.lastZipc) files.push({ blob: state.lastZipc, name: state.zipNamec || '收货包压缩版.zip' });
     // file:// 在 iPhone 上通常不能直接触发下载，优先走系统分享/“存储到文件”。
     if (location.protocol === 'file:' && navigator.canShare && typeof File !== 'undefined') {
-      try {
-        const file = new File([state.lastZip], name, { type: 'application/zip' });
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: '收货包' });
-          toast('已打开保存/分享面板');
-          return;
+      let shared = 0;
+      for (const item of files) {
+        try {
+          const file = new File([item.blob], item.name, { type: 'application/zip' });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: item.name });
+            shared += 1;
+          }
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
         }
-      } catch (err) {
-        if (err && err.name === 'AbortError') return;
+      }
+      if (shared) {
+        toast(shared > 1 ? '已依次打开两个包的保存/分享面板' : '已打开保存/分享面板');
+        return;
       }
     }
-    const url = URL.createObjectURL(state.lastZip);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    toast('已开始下载；请在“文件”App 中确认');
+    for (let i = 0; i < files.length; i++) {
+      const item = files[i];
+      const url = URL.createObjectURL(item.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = item.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      if (i < files.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+    toast(files.length > 1 ? '已开始下载：原图包 + 压缩版' : '已开始下载；请在“文件”App 中确认');
   }
-
   /* ---------------- Actions ---------------- */
   async function addPhotos(files) {
     const item = getItem(state.selectedId);
