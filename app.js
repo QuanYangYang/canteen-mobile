@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261124054347-e1337b9b';
+  const APP_VERSION = '20261124105357-03b3fa35';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -813,7 +813,9 @@
           <div class="stat"><b>${shortCount()}</b><span>缺送</span></div>
         </div>
         <div class="btn-row" style="flex-direction:column">
-          <button class="btn primary block" data-action="download-zip" ${ready ? '' : 'disabled'}>下载收货包 ZIP（原图 + 压缩版）</button>
+          <button class="btn primary block" data-action="download-zip" ${ready ? '' : 'disabled'}>下载原图包 ZIP${ready ? '（' + fmtSize(state.lastZip.size) + '）' : ''}</button>
+          <button class="btn secondary block" data-action="download-zipc" ${readyBoth ? '' : 'disabled'}>下载压缩版 ZIP${readyBoth ? '（' + fmtSize(state.lastZipc.size) + '）' : ''}</button>
+          ${readyBoth ? '<p class="small muted" style="margin-top:8px">两个包分开下载：每次点一个，浏览器只处理一个文件，不会再问“是否下载多个文件”。</p>' : ''}
           ${!ready ? '<button class="btn secondary block" data-action="regenerate-zip">生成收货包</button>' : ''}
           <button class="btn danger block" data-action="clear-task">我已保存，清空手机数据</button>
         </div>
@@ -1377,7 +1379,7 @@
       unbusy();
       render();
       if (state.lastZipc) {
-        toast(`${compress ? '高清压缩收货包' : '原图收货包'}已生成；压缩版 ${fmtSize(state.lastZipc.size)} 已生成`);
+        toast(`${compress ? '高清压缩收货包' : '原图收货包'}已生成；压缩版 ${fmtSize(state.lastZipc.size)} 已生成。下面两个按钮分开下载`);
       } else {
         toast(`收货包已生成；压缩版没生成：${compressedError}`, 4200);
       }
@@ -1386,42 +1388,35 @@
       showError('生成失败', err);
     }
   }
-  async function downloadZip() {
-    if (!state.lastZip) { toast('请先生成收货包'); return; }
-    const files = [{ blob: state.lastZip, name: state.zipName || '收货包.zip' }];
-    if (state.lastZipc) files.push({ blob: state.lastZipc, name: state.zipNamec || '收货包压缩版.zip' });
-    // file:// 在 iPhone 上通常不能直接触发下载，优先走系统分享/“存储到文件”。
+  async function downloadZip(which) {
+    const kind = which === 'zipc' ? 'zipc' : 'orig';
+    const blob = kind === 'zipc' ? state.lastZipc : state.lastZip;
+    const name = kind === 'zipc' ? (state.zipNamec || '收货包压缩版.zip') : (state.zipName || '收货包.zip');
+    if (!blob) { toast(kind === 'zipc' ? '压缩版还没生成，先点“生成收货包”' : '请先生成收货包'); return; }
+    // file://（iPhone 直接打开 html）不能可靠触发下载，改走系统分享/“存储到文件”。
     if (location.protocol === 'file:' && navigator.canShare && typeof File !== 'undefined') {
-      let shared = 0;
-      for (const item of files) {
-        try {
-          const file = new File([item.blob], item.name, { type: 'application/zip' });
-          if (navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: item.name });
-            shared += 1;
-          }
-        } catch (err) {
-          if (err && err.name === 'AbortError') return;
+      try {
+        const file = new File([blob], name, { type: 'application/zip' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: name });
+          toast('已打开保存/分享面板');
+          return;
         }
-      }
-      if (shared) {
-        toast(shared > 1 ? '已依次打开两个包的保存/分享面板' : '已打开保存/分享面板');
-        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
       }
     }
-    for (let i = 0; i < files.length; i++) {
-      const item = files[i];
-      const url = URL.createObjectURL(item.blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = item.name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      if (i < files.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
-    }
-    toast(files.length > 1 ? '已开始下载：原图包 + 压缩版' : '已开始下载；请在“文件”App 中确认');
+    // 一次点击只下载一个文件：不连发两次，避免浏览器弹“下载多个文件”或静默漏掉第二个
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast(`已开始下载：${name}`);
   }
   /* ---------------- Actions ---------------- */
   async function addPhotos(files) {
@@ -1876,7 +1871,8 @@
       render();
       return;
     }
-    if (action === 'download-zip') { downloadZip(); return; }
+    if (action === 'download-zip') { downloadZip('orig'); return; }
+    if (action === 'download-zipc') { downloadZip('zipc'); return; }
     if (action === 'regenerate-zip') { await generateZip(); return; }
     if (action === 'clear-task') {
       if (!window.confirm('确认 ZIP 已保存？\n\n清空后手机端将删除本次任务和照片，只能靠回传包恢复。')) return;
