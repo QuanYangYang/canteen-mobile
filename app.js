@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261124112108-03b3fa35';
+  const APP_VERSION = '20261128005026-d43cf628';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -62,6 +62,8 @@
     updateDismissed: false,
     updateReloading: false,
     updateTimer: null,
+    history: [],
+    orphans: 0,
   };
   const mem = { kv: {}, photos: [], originals: new Map() };
 
@@ -631,6 +633,40 @@
       </section>`;
   }
 
+  function historyHtml() {
+    const list = state.history || [];
+    const rows = list.map((e) => {
+      const p = historyProgress(e);
+      const label = e.task.noteNo || e.task.company || '收货单';
+      const sub = [e.task.company, e.task.date, e.savedAt ? '存于 ' + e.savedAt : ''].filter(Boolean).join(' · ');
+      const submitted = e.task.status === 'submitted';
+      return `<div class="history-row">
+        <div class="history-main">
+          <div class="history-title">${esc(label)}<span class="badge ${submitted ? 'amber' : ''}">${submitted ? '已提交' : '未提交'}</span></div>
+          <div class="small muted">${esc(sub)}</div>
+          <div class="small muted">已完成 ${p.done}/${p.total} · ${Number(e.photoCount || 0)} 张照片</div>
+        </div>
+        <div class="history-ops">
+          <button class="btn secondary small" data-action="history-restore" data-id="${esc(e.id)}">恢复</button>
+          <button class="btn ghost small" data-action="history-delete" data-id="${esc(e.id)}">删除</button>
+        </div>
+      </div>`;
+    }).join('');
+    const orphan = Number(state.orphans || 0);
+    const orphanHtml = orphan > 0 ? `<div class="history-orphan">
+        <span class="small muted">另有 ${orphan} 张旧版本残留照片（不属于任何收货单）</span>
+        <button class="btn ghost small" data-action="clean-orphans">清理</button>
+      </div>` : '';
+    return `<div class="card history-card">
+      <div class="history-head">
+        <h2>历史收货单</h2>
+        <span class="muted small">${list.length ? list.length + ' 条' : '暂无'}</span>
+      </div>
+      <p class="small muted">导入新送货单时，当前收货单会自动存到这里；点「恢复」继续收货，点「删除」连同照片一起释放空间。</p>
+      ${rows || '<p class="small muted">还没有历史收货单。</p>'}
+      ${orphanHtml}
+    </div>`;
+  }
   function renderHome(view) {
     setHeader(APP_NAME, state.settings.locationCode ? `地点 ${locationLabel(state.settings.locationCode)}` : '未设置地点');
     const isFile = location.protocol === 'file:';
@@ -681,6 +717,7 @@
         <p class="small" style="margin-top:6px;overflow-wrap:anywhere">浏览器未允许本地保存。<br>请保持本页面打开，完成导入 → 拍照 → 导出；<br>不要在导出前刷新或关闭。</p>
       </div>` : ''}
       ${current}
+      ${historyHtml()}
       <div class="card">
         <div class="settings-row"><span>收货地点</span><span class="mono">${esc(state.settings.locationCode ? locationLabel(state.settings.locationCode) : '未设置')}</span></div>
         <div class="settings-row"><span>验收人员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
@@ -1110,7 +1147,8 @@
       const parsed = CanteenParser.parseWorkbook(buffer, file.name);
       const hash = await sha256(buffer);
       if (state.task && !window.confirm('当前已有收货任务，导入新单会替换它。继续？')) { unbusy(); return; }
-      if (state.task) await clearTaskData();
+      if (state.task) await archiveCurrentTask(true);
+      await detachCurrentTask();
       const task = makeTask(parsed, file.name, hash);
       const items = makeItems(parsed, task.id);
       state.task = task;
@@ -1157,7 +1195,8 @@
       if (!wbName) throw new Error('ZIP 里没有修改后的送货单 .xlsx');
       const parsed = CanteenWorkbook.parseModifiedWorkbook(entries[wbName]);
       if (state.task && !window.confirm('当前已有收货任务，恢复回传包会替换它。继续？')) { unbusy(); return; }
-      if (state.task) await clearTaskData();
+      if (state.task) await archiveCurrentTask(true);
+      await detachCurrentTask();
       const now = new Date();
       const task = {
         id: parsed.task.id || uid(),
@@ -1251,7 +1290,118 @@
     state.zipNamec = '';
     await delKV('task');
     await delKV('items');
+    await delKV('history');
     await clearPhotos();
+    state.history = [];
+    state.orphans = 0;
+  }
+
+  /* ---------------- History ---------------- */
+  const HISTORY_MAX = 40;
+  async function getHistory() {
+    let raw = null;
+    try { raw = await getKV('history'); } catch (e) { raw = null; }
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((e) => e && e.id && e.task && Array.isArray(e.items));
+  }
+  async function saveHistory(list) {
+    const next = (list || []).slice(0, HISTORY_MAX);
+    await setKV('history', next);
+    state.history = next;
+    return next;
+  }
+  function cloneJson(value) {
+    try { return JSON.parse(JSON.stringify(value)); } catch (e) { return null; }
+  }
+  function historyEntryFromCurrent() {
+    if (!state.task) return null;
+    const task = cloneJson(state.task);
+    const items = cloneJson(state.items) || [];
+    if (!task || !task.id) return null;
+    return { id: task.id, savedAt: nowText(), task, items, photoCount: state.photos.length };
+  }
+  async function archiveCurrentTask(silent) {
+    const entry = historyEntryFromCurrent();
+    if (!entry) return;
+    const list = await getHistory();
+    const next = [entry].concat(list.filter((e) => e.id !== entry.id));
+    await saveHistory(next);
+    if (!silent) toast('当前收货单已存到历史记录');
+  }
+  async function detachCurrentTask() {
+    state.task = null;
+    state.items = [];
+    state.photos = [];
+    state.lastZip = null;
+    state.lastZipc = null;
+    state.zipName = '';
+    state.zipNamec = '';
+    await delKV('task');
+    await delKV('items');
+  }
+  function historyProgress(entry) {
+    const total = entry.items.length;
+    const done = entry.items.filter((i) => itemDone(i)).length;
+    return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+  }
+  async function findOrphanPhotos() {
+    const all = await allPhotos();
+    const keep = new Set();
+    if (state.task) keep.add(state.task.id);
+    for (const e of state.history || []) keep.add(e.id);
+    return all.filter((p) => !p.taskId || !keep.has(p.taskId));
+  }
+  async function cleanupOrphanPhotos() {
+    const list = await findOrphanPhotos();
+    if (!list.length) { toast('没有可清理的残留照片'); return; }
+    if (!window.confirm('清理 ' + list.length + ' 张旧版本残留照片？\n\n它们不属于任何收货单，清理后无法恢复。')) return;
+    busy('正在清理…');
+    try {
+      for (const p of list) await delPhoto(p.id);
+      state.orphans = 0;
+    } finally { unbusy(); }
+    render();
+    toast('已清理 ' + list.length + ' 张残留照片');
+  }
+  async function deleteHistoryTask(id) {
+    const list = await getHistory();
+    const entry = list.find((e) => e.id === id);
+    if (!entry) { toast('这条历史记录已经不存在'); return; }
+    const mine = (await allPhotos()).filter((p) => p.taskId === id);
+    const label = entry.task.noteNo || entry.task.company || '该收货单';
+    if (!window.confirm('删除历史收货单「' + label + '」？\n\n它的 ' + mine.length + ' 张照片会一起删除，无法恢复。')) return;
+    busy('正在删除…');
+    try {
+      for (const p of mine) await delPhoto(p.id);
+      await saveHistory(list.filter((e) => e.id !== id));
+      state.orphans = (await findOrphanPhotos()).length;
+    } finally { unbusy(); }
+    render();
+    toast('已删除「' + label + '」及 ' + mine.length + ' 张照片');
+  }
+  async function restoreHistoryTask(id) {
+    const list = await getHistory();
+    const entry = list.find((e) => e.id === id);
+    if (!entry) { toast('这条历史记录已经不存在'); return; }
+    if (state.task && !window.confirm('恢复历史收货单会替换当前任务，当前任务会先存到历史。继续？')) return;
+    busy('正在恢复收货单…');
+    try {
+      if (state.task) await archiveCurrentTask(true);
+      await detachCurrentTask();
+      const task = cloneJson(entry.task) || entry.task;
+      const items = (cloneJson(entry.items) || []).map((i) => ({ ...i, done: itemDone(i) }));
+      state.task = task;
+      state.items = items;
+      state.photos = (await allPhotos()).filter((p) => p.taskId === task.id);
+      for (const item of items) item.photoCount = state.photos.filter((p) => p.itemId === item.id).length;
+      refreshItemAmounts();
+      await saveHistory(list.filter((e) => e.id !== id));
+      await persist();
+      state.view = 'list';
+      state.search = '';
+    } finally { unbusy(); }
+    render();
+    toast('已恢复 ' + state.items.length + ' 项、' + state.photos.length + ' 张照片');
   }
 
   /* ---------------- Zip ---------------- */
@@ -1874,8 +2024,11 @@
     if (action === 'download-zip') { downloadZip('orig'); return; }
     if (action === 'download-zipc') { downloadZip('zipc'); return; }
     if (action === 'regenerate-zip') { await generateZip(); return; }
+    if (action === 'history-restore') { await restoreHistoryTask(el.dataset.id); return; }
+    if (action === 'history-delete') { await deleteHistoryTask(el.dataset.id); return; }
+    if (action === 'clean-orphans') { await cleanupOrphanPhotos(); return; }
     if (action === 'clear-task') {
-      if (!window.confirm('确认 ZIP 已保存？\n\n清空后手机端将删除本次任务和照片，只能靠回传包恢复。')) return;
+      if (!window.confirm('确认 ZIP 已保存？\n\n清空会删除本次任务、历史收货单和全部照片，只能靠回传包恢复。')) return;
       await clearTaskData();
       state.view = 'home';
       render();
@@ -1976,6 +2129,13 @@
       state.photos = (await allPhotos()).filter((p) => p.taskId === task.id);
       for (const item of state.items) item.photoCount = photosFor(item.id).length;
       refreshItemAmounts();
+    }
+    try {
+      state.history = await getHistory();
+      state.orphans = (await findOrphanPhotos()).length;
+    } catch (e) {
+      state.history = [];
+      state.orphans = 0;
     }
     state.view = settingsReady() ? 'home' : 'setup';
     render();
