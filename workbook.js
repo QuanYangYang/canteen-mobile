@@ -250,6 +250,5 @@
     HEADERS,
     buildWorkbook,
     parseModifiedWorkbook,
-    _internals: { text, num, style },
   };
 });

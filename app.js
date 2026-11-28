@@ -1,11 +1,14 @@
-/* 食堂手机收货端：单任务、拍照、修改送货单、ZIP 导出与回传恢复。 */
+/* 食堂手机收货端：单任务、拍照、修改送货单、ZIP 导出与回传恢复。
+ * 分区目录：常量 → 工具 → IndexedDB → 数据 → 图片 → 渲染 → 弹窗 → 导入/恢复
+ *          → 历史 → ZIP → 动作 → 更新 → 事件 → 启动
+ */
 (function () {
   'use strict';
 
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128015414-60c4a086';
+  const APP_VERSION = '20261128023720-525a2907';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -255,11 +258,6 @@
     });
   }
 
-  let saveTimer = null;
-  function scheduleSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { persist().catch((err) => console.error(err)); }, 180);
-  }
   async function persist() {
     if (!state.task) return;
     await setKV('task', state.task);
@@ -317,9 +315,6 @@
     return state.items.filter((i) => (i.receiveRemark || '').trim()).length;
   }
   function getItem(id) { return state.items.find((i) => i.id === id) || null; }
-  function sortItems() {
-    state.items.sort((a, b) => Number(a.lineNo) - Number(b.lineNo));
-  }
   function taskProgress() {
     const total = state.items.length;
     const done = doneCount();
@@ -399,28 +394,6 @@
     const height = img.height || img.naturalHeight || 0;
     if (img.close) img.close();
     return { width, height };
-  }
-  async function compressImage(file) {
-    const img = await decodeImage(file);
-    const w = img.width || img.naturalWidth;
-    const h = img.height || img.naturalHeight;
-    if (!w || !h) throw new Error('图片尺寸无效');
-    const max = 2000;
-    const scale = Math.min(1, max / Math.max(w, h));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(w * scale));
-    canvas.height = Math.max(1, Math.round(h * scale));
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    if (img.close) img.close();
-    let quality = 0.82;
-    let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
-    while (blob && blob.size > MAX_PHOTO_BYTES && quality > 0.48) {
-      quality -= 0.08;
-      blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
-    }
-    if (!blob) throw new Error('图片压缩失败');
-    return blob;
   }
   function fileExt(file) {
     const name = String((file && file.name) || '');
@@ -656,7 +629,7 @@
     const orphanHtml = `<div class="history-orphan">
         <span class="small muted">${orphan > 0
           ? `另有 ${orphan} 张旧版本残留照片（不属于任何收货单，可以导出或清理）`
-          : '没有检测到旧版本残留照片：旧数据可能已被旧版清理，浏览器占用的空间会在之后自动收回'}</span>
+          : '没有检测到旧版本残留照片：这里没有可释放的照片（旧记录已被清理）'}</span>
         ${orphan > 0
           ? `<button class="btn secondary small" data-action="export-orphans">导出残留照片</button>
         <button class="btn ghost small" data-action="clean-orphans">清理</button>`
@@ -1094,7 +1067,7 @@
     if (!blob) { toast('原图已不在本机，只能查看缩略图'); return; }
     const url = blobUrl(blob);
     const dims = photo.width && photo.height ? `${photo.width} × ${photo.height}` : '原图';
-    const size = blob.size ? `${(blob.size / (1024 * 1024)).toFixed(2)} MB` : '';
+    const size = blob.size ? fmtSize(blob.size) : '';
     showModal(`
       <h2>${esc(item?.name || '照片')} · ${esc(photo.order)}</h2>
       <p class="muted">${esc(item?.lineNo || '')} · ${esc(dims)} ${size ? '· ' + esc(size) : ''}${photo.legacyCompressed ? ' · 旧版压缩图' : ''}</p>
@@ -1932,17 +1905,15 @@
     const photo = state.photos.find((p) => p.id === photoId);
     if (!photo) return;
     if (!window.confirm('删除这张照片？')) return;
-    item_deleted: {
-      const item = getItem(photo.itemId);
-      await delPhoto(photoId);
-      state.photos = state.photos.filter((p) => p.id !== photoId);
-      if (item) {
-        const list = photosFor(item.id);
-        for (let i = 0; i < list.length; i++) { list[i].order = i + 1; await putPhoto(list[i]); }
-        item.photoCount = list.length;
-        refreshItem(item);
-        await persist();
-      }
+    const item = getItem(photo.itemId);
+    await delPhoto(photoId);
+    state.photos = state.photos.filter((p) => p.id !== photoId);
+    if (item) {
+      const list = photosFor(item.id);
+      for (let i = 0; i < list.length; i++) { list[i].order = i + 1; await putPhoto(list[i]); }
+      item.photoCount = list.length;
+      refreshItem(item);
+      await persist();
     }
     render();
     toast('照片已删除');
@@ -2032,7 +2003,7 @@
     state.updateChecking = true;
     state.updateLastCheck = now;
     try {
-      const res = await fetch(`version.json?t=${now}`, { cache: 'no-store' });
+      const res = await fetch(`${VERSION_URL}?t=${now}`, { cache: 'no-store' });
       if (!res.ok) return;
       const info = await res.json();
       if (info && info.version && info.version !== APP_VERSION) {

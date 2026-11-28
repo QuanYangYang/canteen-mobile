@@ -211,6 +211,5 @@
   return {
     parseWorkbook,
     ParseError,
-    _internals: { text, numberOrNull, headerMap, readContext, parseItem },
   };
 });
