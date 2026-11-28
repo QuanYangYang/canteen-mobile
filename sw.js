@@ -1,5 +1,5 @@
 /* 离线缓存：应用壳 + 本地 vendor；不缓存任何业务数据。 */
-const CACHE = 'canteen-mobile-20261128010708-d7a086f8';
+const CACHE = 'canteen-mobile-20261128011901-bef6383f';
 const ASSETS = [
   './',
   './index.html',

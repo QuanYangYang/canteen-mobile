@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128010708-d7a086f8';
+  const APP_VERSION = '20261128011901-bef6383f';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -653,11 +653,15 @@
       </div>`;
     }).join('');
     const orphan = Number(state.orphans || 0);
-    const orphanHtml = orphan > 0 ? `<div class="history-orphan">
-        <span class="small muted">另有 ${orphan} 张旧版本残留照片（不属于任何收货单，可以导出或清理）</span>
-        <button class="btn secondary small" data-action="export-orphans">导出残留照片</button>
-        <button class="btn ghost small" data-action="clean-orphans">清理</button>
-      </div>` : '';
+    const orphanHtml = `<div class="history-orphan">
+        <span class="small muted">${orphan > 0
+          ? `另有 ${orphan} 张旧版本残留照片（不属于任何收货单，可以导出或清理）`
+          : '没有检测到旧版本残留照片：旧数据可能已被旧版清理，浏览器占用的空间会在之后自动收回'}</span>
+        ${orphan > 0
+          ? `<button class="btn secondary small" data-action="export-orphans">导出残留照片</button>
+        <button class="btn ghost small" data-action="clean-orphans">清理</button>`
+          : `<button class="btn ghost small" data-action="refresh-orphans">重新检查</button>`}
+      </div>`;
     return `<div class="card history-card">
       <div class="history-head">
         <h2>历史收货单</h2>
@@ -722,7 +726,12 @@
       <div class="card">
         <div class="settings-row"><span>收货地点</span><span class="mono">${esc(state.settings.locationCode ? locationLabel(state.settings.locationCode) : '未设置')}</span></div>
         <div class="settings-row"><span>验收人员</span><span>${esc(state.settings.operator || '未设置')}</span></div>
-        <button class="btn ghost small" data-action="settings" style="margin-top:8px">修改设置</button>
+        <div class="settings-row"><span>版本</span><span class="mono small">${esc(APP_VERSION)}</span></div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn ghost small" data-action="settings">修改设置</button>
+          <button class="btn ghost small" data-action="storage-info">存储占用</button>
+          <button class="btn ghost small" data-action="force-update">检查更新</button>
+        </div>
       </div>
       <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : 'iPhone 可“添加到主屏幕”。'}</p>`;
   }
@@ -1352,6 +1361,63 @@
     for (const e of state.history || []) keep.add(e.id);
     return all.filter((p) => !p.taskId || !keep.has(p.taskId));
   }
+  async function refreshOrphanCount() {
+    const list = await findOrphanPhotos();
+    state.orphans = list.length;
+    render();
+    toast(list.length ? '找到 ' + list.length + ' 张残留照片，可以导出或清理' : '确实没有残留照片：旧数据已经被清掉了');
+  }
+
+  async function forceUpdate() {
+    busy('正在检查新版本…');
+    let touched = 0;
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const reg of regs) {
+          try { await reg.unregister(); touched += 1; } catch (err) { /* ignore */ }
+        }
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        for (const key of keys) {
+          try { await caches.delete(key); touched += 1; } catch (err) { /* ignore */ }
+        }
+      }
+      await persist().catch(() => {});
+      toast(touched ? '已清掉旧缓存，正在重新加载最新版本…' : '缓存是干净的，正在重新加载…');
+      setTimeout(() => { location.replace(location.pathname + '?v=' + Date.now()); }, 700);
+    } catch (err) {
+      unbusy();
+      toast('检查更新失败：' + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function showStorageInfo() {
+    const lines = ['本地照片：当前任务 ' + state.photos.length + ' 张'];
+    lines.push('历史收货单：' + (state.history || []).length + ' 单 · 残留照片：' + Number(state.orphans || 0) + ' 张');
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const est = await navigator.storage.estimate();
+        const used = Number(est.usage || 0);
+        const quota = Number(est.quota || 0);
+        lines.push('浏览器已用：' + fmtSize(used) + (quota ? ' / 配额 ' + fmtSize(quota) : ''));
+      } catch (err) {
+        lines.push('浏览器占用：读取失败（' + (err && err.message ? err.message : err) + '）');
+      }
+    } else {
+      lines.push('浏览器占用：这个浏览器不支持查询');
+    }
+    if (navigator.storage && navigator.storage.persisted) {
+      try {
+        const kept = await navigator.storage.persisted();
+        lines.push('数据是否常驻：' + (kept ? '是（不会被浏览器自动清）' : '否（空间紧张时可能被浏览器回收）'));
+      } catch (err) { /* ignore */ }
+    }
+    lines.push('提示：删掉照片后占用不会立刻变小，浏览器要过一阵才回收磁盘。');
+    window.alert(lines.join('\n'));
+  }
+
   async function cleanupOrphanPhotos() {
     const list = await findOrphanPhotos();
     if (!list.length) { toast('没有可清理的残留照片'); return; }
@@ -2098,6 +2164,9 @@
     if (action === 'history-delete') { await deleteHistoryTask(el.dataset.id); return; }
     if (action === 'export-orphans') { await exportOrphanPhotos(); return; }
     if (action === 'clean-orphans') { await cleanupOrphanPhotos(); return; }
+    if (action === 'refresh-orphans') { await refreshOrphanCount(); return; }
+    if (action === 'force-update') { await forceUpdate(); return; }
+    if (action === 'storage-info') { await showStorageInfo(); return; }
     if (action === 'clear-task') {
       if (!window.confirm('确认 ZIP 已保存？\n\n清空会删除本次任务、历史收货单和全部照片，只能靠回传包恢复。')) return;
       await clearTaskData();
@@ -2185,6 +2254,9 @@
         if (s.locationCode) state.settings.locationCode = String(s.locationCode);
         if (typeof s.operator === 'string') state.settings.operator = s.operator;
       } catch (e) { /* ignore */ }
+    }
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
     }
     try {
       state.db = await openDB();
