@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128005026-d43cf628';
+  const APP_VERSION = '20261128010708-d7a086f8';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -654,7 +654,8 @@
     }).join('');
     const orphan = Number(state.orphans || 0);
     const orphanHtml = orphan > 0 ? `<div class="history-orphan">
-        <span class="small muted">另有 ${orphan} 张旧版本残留照片（不属于任何收货单）</span>
+        <span class="small muted">另有 ${orphan} 张旧版本残留照片（不属于任何收货单，可以导出或清理）</span>
+        <button class="btn secondary small" data-action="export-orphans">导出残留照片</button>
         <button class="btn ghost small" data-action="clean-orphans">清理</button>
       </div>` : '';
     return `<div class="card history-card">
@@ -1363,6 +1364,75 @@
     render();
     toast('已清理 ' + list.length + ' 张残留照片');
   }
+  async function saveBlobFile(blob, name) {
+    if (location.protocol === 'file:' && navigator.canShare && typeof File !== 'undefined') {
+      try {
+        const file = new File([blob], name, { type: blob.type || 'application/zip' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: name });
+          return 'share';
+        }
+      } catch (err) {
+        if (err && err.name === 'AbortError') return 'cancel';
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return 'download';
+  }
+  async function exportOrphanPhotos() {
+    const list = await findOrphanPhotos();
+    if (!list.length) { toast('没有可导出的残留照片'); return; }
+    list.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const totalBytes = list.reduce((sum, p) => sum + Number(p.bytes || 0), 0);
+    if (totalBytes > 250 * 1024 * 1024 && !window.confirm('残留照片约 ' + fmtSize(totalBytes) + '，打包会比较久，继续？')) return;
+    busy('正在打包 0/' + list.length + ' 张残留照片…');
+    let added = 0;
+    let skipped = 0;
+    try {
+      const sink = createZipSink();
+      const readme = [
+        '这些照片残留在手机浏览器里，已经不属于任何收货单（旧版本覆盖收货单时留下的）。',
+        '本次导出 ' + list.length + ' 张，导出于 ' + nowText() + '。',
+        '导完可以回首页「历史收货单」里的那一行点“清理”，把浏览器空间真正释放。'
+      ].join('\r\n');
+      sink.addFile('说明.txt', new TextEncoder().encode(readme));
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        $('#busy-text').textContent = '正在打包 ' + (i + 1) + '/' + list.length + ' 张残留照片…';
+        let blob = null;
+        try { blob = await getOriginal(p.id); } catch (err) { blob = null; }
+        if (blob && typeof blob === 'string') {
+          try { blob = await (await fetch(blob)).blob(); } catch (err) { blob = null; }
+        }
+        if (!blob || !blob.size) { skipped += 1; continue; }
+        const ext = String(p.ext || 'jpg').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
+        const stamp = String(p.createdAt || '').replace(/[^0-9]/g, '').slice(0, 14) || '未知时间';
+        added += 1;
+        sink.addFile('残留照片/' + String(added).padStart(3, '0') + '_' + stamp + '.' + ext, new Uint8Array(await blob.arrayBuffer()));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      sink.zip.end();
+      const zipBlob = await sink.done;
+      if (!added) { toast('残留照片取不出来（可能已被浏览器清掉）'); return; }
+      const d = new Date();
+      const name = '残留照片_' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '_' + pad2(d.getHours()) + pad2(d.getMinutes()) + '.zip';
+      const how = await saveBlobFile(zipBlob, name);
+      if (how === 'cancel') return;
+      const tail = skipped ? '，' + skipped + ' 张读不出已跳过' : '';
+      toast((how === 'share' ? '已打开保存/分享面板：' : '已开始下载：') + name + '（' + added + ' 张 / ' + fmtSize(zipBlob.size) + tail + '）');
+    } catch (err) {
+      toast('导出残留照片失败：' + (err && err.message ? err.message : err));
+    } finally { unbusy(); }
+  }
+
   async function deleteHistoryTask(id) {
     const list = await getHistory();
     const entry = list.find((e) => e.id === id);
@@ -2026,6 +2096,7 @@
     if (action === 'regenerate-zip') { await generateZip(); return; }
     if (action === 'history-restore') { await restoreHistoryTask(el.dataset.id); return; }
     if (action === 'history-delete') { await deleteHistoryTask(el.dataset.id); return; }
+    if (action === 'export-orphans') { await exportOrphanPhotos(); return; }
     if (action === 'clean-orphans') { await cleanupOrphanPhotos(); return; }
     if (action === 'clear-task') {
       if (!window.confirm('确认 ZIP 已保存？\n\n清空会删除本次任务、历史收货单和全部照片，只能靠回传包恢复。')) return;
