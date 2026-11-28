@@ -8,7 +8,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128023720-525a2907';
+  const APP_VERSION = '20261128025326-e7a96594';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -33,6 +33,18 @@
     const value = String(code || '');
     const found = LOCATIONS.find((l) => l.code === value);
     return found ? found.name + found.code : value;
+  }
+  /**
+   * 送货单「客户名称」开头带地址码：065 → 本段收菜65，066 → 驱动收菜66。
+   * 只在导入送货单时对齐一次收货地点；导入后仍可在「修改设置」里改。
+   */
+  function locationCodeFromNote(parsed, fileName) {
+    if (!parsed) return '';
+    const src = String(parsed.customer || '') + ' ' + String(fileName || '');
+    const m = src.match(/(?:^|\D)0(6[56])(?=\D|$)/);
+    if (!m) return '';
+    const code = m[1];
+    return LOCATIONS.some((l) => l.code === code) ? code : '';
   }
   function locationOptionsHtml(selected) {
     const cur = String(selected || '');
@@ -1133,6 +1145,12 @@
       if (state.task && !window.confirm('当前已有收货任务，导入新单会替换它。继续？')) { unbusy(); return; }
       if (state.task) await archiveCurrentTask(true);
       await detachCurrentTask();
+      // 按送货单客户名称里的地址码（065/066）对齐收货地点，只覆盖这一次
+      const noteCode = locationCodeFromNote(parsed, file.name);
+      if (noteCode && noteCode !== state.settings.locationCode) {
+        state.settings.locationCode = noteCode;
+        try { localStorage.setItem('canteen.settings', JSON.stringify(state.settings)); } catch (e) { /* file:// may block */ }
+      }
       const task = makeTask(parsed, file.name, hash);
       const items = makeItems(parsed, task.id);
       state.task = task;
@@ -1147,7 +1165,9 @@
       await persist();
       unbusy();
       render();
-      toast(`已导入 ${items.length} 项，共 ${parsed.pageCount} 页`);
+      toast(noteCode
+        ? `已导入 ${items.length} 项，共 ${parsed.pageCount} 页；收货地点按送货单设为 ${locationLabel(noteCode)}`
+        : `已导入 ${items.length} 项，共 ${parsed.pageCount} 页`);
     } catch (err) {
       unbusy();
       showError('导入失败', err);
