@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128011901-bef6383f';
+  const APP_VERSION = '20261128013418-38cecfe1';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -731,6 +731,7 @@
           <button class="btn ghost small" data-action="settings">修改设置</button>
           <button class="btn ghost small" data-action="storage-info">存储占用</button>
           <button class="btn ghost small" data-action="force-update">检查更新</button>
+          <button class="btn danger small" data-action="wipe-data">清空本站数据</button>
         </div>
       </div>
       <p class="small muted" style="text-align:center">${isFile ? '离线单文件版：不需要网站，也不需要联网；请及时导出收货包。' : storageIssue ? '本地存储未启用：请保持页面打开，导出后再关闭。' : 'iPhone 可“添加到主屏幕”。'}</p>`;
@@ -1414,8 +1415,55 @@
         lines.push('数据是否常驻：' + (kept ? '是（不会被浏览器自动清）' : '否（空间紧张时可能被浏览器回收）'));
       } catch (err) { /* ignore */ }
     }
-    lines.push('提示：删掉照片后占用不会立刻变小，浏览器要过一阵才回收磁盘。');
+    lines.push('提示：删照片只把记录删掉，浏览器不会马上把文件还给手机；要真正腾出空间，用下面的「清空本站数据」（会删掉整库，先导出收货包）。');
+    lines.push('也可以在 Chrome 设置 → 网站设置 → 本站 → 清除并重置，效果相同。');
     window.alert(lines.join('\n'));
+  }
+
+  async function wipeSiteData() {
+    let used = 0;
+    if (navigator.storage && navigator.storage.estimate) {
+      try { const est = await navigator.storage.estimate(); used = Number(est.usage || 0); } catch (e) { /* ignore */ }
+    }
+    const tip = '彻底清空本站数据？\n\n' +
+      '会删除：当前收货单、历史收货单、全部照片（含残留）、离线缓存、设置。\n' +
+      (used ? '现在占用约 ' + fmtSize(used) + '。\n' : '') +
+      '删记录时浏览器只把格子空出来、文件还占着；只有把整个本地数据库删掉，空间才会真正还给手机。\n' +
+      '清空后无法恢复，请先导出收货包。';
+    if (!window.confirm(tip)) return;
+    busy('正在彻底清空…');
+    try {
+      stopCameraStream();
+      if (state.db) { try { state.db.close(); } catch (e) { /* ignore */ } }
+      state.db = null;
+      if (window.indexedDB) {
+        await new Promise((resolve) => {
+          let req;
+          try { req = indexedDB.deleteDatabase(DB_NAME); } catch (e) { resolve(); return; }
+          req.onsuccess = () => resolve();
+          req.onerror = () => resolve();
+          req.onblocked = () => resolve();
+          setTimeout(resolve, 3000);
+        });
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        for (const key of keys) { try { await caches.delete(key); } catch (e) { /* ignore */ } }
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const reg of regs) { try { await reg.unregister(); } catch (e) { /* ignore */ } }
+      }
+      try { localStorage.clear(); } catch (e) { /* ignore */ }
+      mem.photos = []; mem.originals.clear();
+      state.task = null; state.items = []; state.photos = []; state.history = []; state.orphans = 0;
+      localStorage.setItem('canteen.settings', JSON.stringify(state.settings));
+      toast('已彻底清空，正在重新加载…');
+      setTimeout(() => { location.replace(location.pathname + '?v=' + Date.now()); }, 900);
+    } catch (err) {
+      unbusy();
+      toast('清空失败：' + (err && err.message ? err.message : err));
+    }
   }
 
   async function cleanupOrphanPhotos() {
@@ -2167,6 +2215,7 @@
     if (action === 'refresh-orphans') { await refreshOrphanCount(); return; }
     if (action === 'force-update') { await forceUpdate(); return; }
     if (action === 'storage-info') { await showStorageInfo(); return; }
+    if (action === 'wipe-data') { await wipeSiteData(); return; }
     if (action === 'clear-task') {
       if (!window.confirm('确认 ZIP 已保存？\n\n清空会删除本次任务、历史收货单和全部照片，只能靠回传包恢复。')) return;
       await clearTaskData();
