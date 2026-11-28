@@ -5,7 +5,7 @@
   const BRAND_ORG = '武汉大功率机车检修段';
   const BRAND_PRODUCT = '食堂收货管理系统M1';
   const APP_NAME = BRAND_ORG + BRAND_PRODUCT;
-  const APP_VERSION = '20261128013418-38cecfe1';
+  const APP_VERSION = '20261128015414-60c4a086';
   const VERSION_URL = 'version.json';
   const DB_NAME = 'canteen_mobile';
   const DB_VERSION = 2;
@@ -1395,7 +1395,10 @@
   }
 
   async function showStorageInfo() {
-    const lines = ['本地照片：当前任务 ' + state.photos.length + ' 张'];
+    const all = await allPhotos().catch(() => []);
+    const bytes = all.reduce((sum, p) => sum + (Number(p.bytes) || 0), 0);
+    const lines = ['本系统照片：' + all.length + ' 张，原图合计 ' + fmtSize(bytes)];
+    lines.push('本地照片：当前任务 ' + state.photos.length + ' 张');
     lines.push('历史收货单：' + (state.history || []).length + ' 单 · 残留照片：' + Number(state.orphans || 0) + ' 张');
     if (navigator.storage && navigator.storage.estimate) {
       try {
@@ -1415,7 +1418,8 @@
         lines.push('数据是否常驻：' + (kept ? '是（不会被浏览器自动清）' : '否（空间紧张时可能被浏览器回收）'));
       } catch (err) { /* ignore */ }
     }
-    lines.push('提示：删照片只把记录删掉，浏览器不会马上把文件还给手机；要真正腾出空间，用下面的「清空本站数据」（会删掉整库，先导出收货包）。');
+    lines.push('提示：这个数字只是本系统（本站）的占用；手机设置里看到的 Chrome 几百 MB 是浏览器自己的缓存，不在这份数据里。');
+    lines.push('照片删掉后这个数字会马上变小；要连浏览器缓存一起清，用「清空本站数据」或去 Chrome 设置里清缓存。');
     lines.push('也可以在 Chrome 设置 → 网站设置 → 本站 → 清除并重置，效果相同。');
     window.alert(lines.join('\n'));
   }
